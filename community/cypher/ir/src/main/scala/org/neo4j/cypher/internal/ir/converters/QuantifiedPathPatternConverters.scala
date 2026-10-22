@@ -35,6 +35,9 @@ import org.neo4j.cypher.internal.expressions.RelationshipChain
 import org.neo4j.cypher.internal.expressions.ShortestPathsPatternPart
 import org.neo4j.cypher.internal.expressions.StarQuantifier
 import org.neo4j.cypher.internal.expressions.VariableGrouping
+import org.neo4j.cypher.internal.ir.ExhaustiveNodeConnection
+import org.neo4j.cypher.internal.ir.ExhaustivePathPattern
+import org.neo4j.cypher.internal.ir.ExhaustivePathPattern.NodeConnections
 import org.neo4j.cypher.internal.ir.NodeBinding
 import org.neo4j.cypher.internal.ir.PatternRelationship
 import org.neo4j.cypher.internal.ir.QuantifiedPathPattern
@@ -48,14 +51,15 @@ object QuantifiedPathPatternConverters {
   def convertQuantifiedPath(
     outerLeft: LogicalVariable,
     quantifiedPath: QuantifiedPath,
-    outerRight: LogicalVariable
+    outerRight: LogicalVariable,
+    convertElement: PatternElement => ExhaustivePathPattern[ExhaustiveNodeConnection]
   ): QuantifiedPathPattern = {
     val patternPart = getPathPattern(quantifiedPath)
     val patternElement = patternPart.element
-    val patternRelationships = getPatternRelationships(patternElement)
+    val connections = getConnections(patternElement, convertElement)
     val groupings = VariableGroupings.build(quantifiedPath.variableGroupings)
-    patternRelationships
-      .map(relationship => QuantifiedPathPatternBuilder.fromPatternRelationship(groupings, relationship))
+    connections
+      .map(connection => QuantifiedPathPatternBuilder.fromConnection(groupings, connection))
       .reduceLeft(_.append(_))
       .build(
         outerLeft = outerLeft,
@@ -86,27 +90,45 @@ object QuantifiedPathPatternConverters {
         throw new IllegalArgumentException("sub-path assignment is not currently supported")
     }
 
-  private def getPatternRelationships(patternElement: PatternElement): NonEmptyList[PatternRelationship] =
+  /**
+   * Convert the body of a quantified path pattern into the connections it is made up of.
+   *
+   * A body is usually a plain relationship chain, but may also be a concatenation (or a nested quantified
+   * path pattern, which is padded with filler nodes into a concatenation by an earlier rewriting step).
+   * For those cases we delegate back to the regular [[ExhaustivePathPattern]] conversion, which already
+   * knows how to fold quantified path patterns and simple patterns into a [[NodeConnections]] list.
+   */
+  private def getConnections(
+    patternElement: PatternElement,
+    convertElement: PatternElement => ExhaustivePathPattern[ExhaustiveNodeConnection]
+  ): NonEmptyList[ExhaustiveNodeConnection] =
     patternElement match {
-      case relationshipChain: RelationshipChain => SimplePatternConverters.convertRelationshipChain(relationshipChain)
+      case relationshipChain: RelationshipChain =>
+        SimplePatternConverters.convertRelationshipChain(relationshipChain)
+      case PathConcatenation(_) =>
+        convertToConnections(patternElement, convertElement)
+      case quantifiedPath: QuantifiedPath =>
+        convertToConnections(getPathPattern(quantifiedPath).element, convertElement)
+      case ParenthesizedPath(part, _) =>
+        convertToConnections(part.element, convertElement)
       case _: NodePattern =>
         throw new IllegalArgumentException("quantified path patterns must contain at least one relationship")
-      case _: PathConcatenation =>
-        throw new IllegalArgumentException(
-          "path concatenation is not currently supported inside of quantified path patterns"
-        )
-      case _: QuantifiedPath =>
-        throw new IllegalArgumentException("nested quantified path patterns are not currently supported")
-      case _: ParenthesizedPath =>
-        throw new IllegalArgumentException(
-          "parenthesised path patterns are not currently supported inside of quantified path patterns"
-        )
+    }
+
+  private def convertToConnections(
+    patternElement: PatternElement,
+    convertElement: PatternElement => ExhaustivePathPattern[ExhaustiveNodeConnection]
+  ): NonEmptyList[ExhaustiveNodeConnection] =
+    convertElement(patternElement) match {
+      case NodeConnections(connections) => connections
+      case _: ExhaustivePathPattern.SingleNode[_] =>
+        throw new IllegalArgumentException("quantified path patterns must contain at least one relationship")
     }
 
   final private case class QuantifiedPathPatternBuilder(
     leftMostNode: LogicalVariable,
     rightMostNode: LogicalVariable,
-    patternRelationships: NonEmptyList[PatternRelationship],
+    patternRelationships: NonEmptyList[ExhaustiveNodeConnection],
     nodeVariableGroupings: Set[VariableGrouping],
     relationshipVariableGroupings: Set[VariableGrouping]
   ) {
@@ -139,18 +161,45 @@ object QuantifiedPathPatternConverters {
 
   private object QuantifiedPathPatternBuilder {
 
-    def fromPatternRelationship(
+    def fromConnection(
       variableGroupings: VariableGroupings,
-      patternRelationship: PatternRelationship
-    ): QuantifiedPathPatternBuilder = {
-      val patternNodes = Set(patternRelationship.left, patternRelationship.right)
-      QuantifiedPathPatternBuilder(
-        leftMostNode = patternRelationship.left,
-        rightMostNode = patternRelationship.right,
-        patternRelationships = NonEmptyList(patternRelationship),
-        nodeVariableGroupings = variableGroupings.forSingletonNames(patternNodes),
-        relationshipVariableGroupings = variableGroupings.forSingletonName(patternRelationship.variable).toSet
-      )
+      connection: ExhaustiveNodeConnection
+    ): QuantifiedPathPatternBuilder = connection match {
+      case patternRelationship: PatternRelationship =>
+        val patternNodes = Set(patternRelationship.left, patternRelationship.right)
+        QuantifiedPathPatternBuilder(
+          leftMostNode = patternRelationship.left,
+          rightMostNode = patternRelationship.right,
+          patternRelationships = NonEmptyList(patternRelationship),
+          nodeVariableGroupings = variableGroupings.forSingletonNames(patternNodes),
+          relationshipVariableGroupings = variableGroupings.forSingletonName(patternRelationship.variable).toSet
+        )
+      case nestedQpp: QuantifiedPathPattern =>
+        // A nested quantified path pattern exposes its own group variables. The enclosing quantified path
+        // pattern groups those once more, one level up: each group variable of the nested pattern becomes a
+        // singleton of the enclosing pattern, mapped to a new group variable of the enclosing pattern.
+        // This is exactly the grouping the AST already carries in `variableGroupings` (which is keyed by the
+        // nested pattern's group variables and by the enclosing boundary node variables).
+        def regroup(innerGroup: LogicalVariable): LogicalVariable =
+          variableGroupings.forSingletonName(innerGroup).map(_.group).getOrElse(innerGroup)
+
+        // At the enclosing level the nested pattern is represented by its *group* variables, so those become the
+        // singletons of the enclosing pattern (each mapped to a fresh group variable one level up).
+        def regroupGrouping(grouping: VariableGrouping): VariableGrouping =
+          VariableGrouping(grouping.group, regroup(grouping.group))(grouping.position)
+
+        // The boundary nodes of the nested pattern are plain nodes of the enclosing pattern and get their own
+        // group variables directly from the enclosing pattern's groupings.
+        val boundaryNodeGroupings =
+          variableGroupings.forSingletonNames(Set(nestedQpp.left, nestedQpp.right))
+
+        QuantifiedPathPatternBuilder(
+          leftMostNode = nestedQpp.left,
+          rightMostNode = nestedQpp.right,
+          patternRelationships = NonEmptyList(nestedQpp),
+          nodeVariableGroupings = nestedQpp.nodeVariableGroupings.map(regroupGrouping) ++ boundaryNodeGroupings,
+          relationshipVariableGroupings = nestedQpp.relationshipVariableGroupings.map(regroupGrouping)
+        )
     }
   }
 

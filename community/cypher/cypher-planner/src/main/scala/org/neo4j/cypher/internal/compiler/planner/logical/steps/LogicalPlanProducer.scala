@@ -1590,7 +1590,7 @@ case class LogicalPlanProducer(
           innerEnd = endBinding.inner,
           nodeVariableGroupings = pattern.nodeVariableGroupings,
           relationshipVariableGroupings = pattern.relationshipVariableGroupings,
-          innerRelationships = pattern.patternRelationships.map(p => p.variable).toSet,
+          innerRelationships = pattern.relationshipVariableGroupings.map(_.singleton),
           previouslyBoundRelationships = previouslyBoundRelationships,
           previouslyBoundRelationshipGroups = previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections = reverseGroupVariableProjections,
@@ -1609,7 +1609,7 @@ case class LogicalPlanProducer(
           nodeVariableGroupings = pattern.nodeVariableGroupings,
           relationshipVariableGroupings = pattern.relationshipVariableGroupings,
           reverseGroupVariableProjections = reverseGroupVariableProjections,
-          innerRelationships = pattern.patternRelationships.map(p => p.variable).toSet,
+          innerRelationships = pattern.relationshipVariableGroupings.map(_.singleton),
           expansionMode = expansionMode,
           accumulatorMappings = rewrittenAllReduceAccumulators
         )
@@ -1627,7 +1627,7 @@ case class LogicalPlanProducer(
           previouslyBoundNodes = previouslyBoundNodes,
           previouslyBoundNodeGroups = previouslyBoundNodeGroups,
           relationshipVariableGroupings = pattern.relationshipVariableGroupings,
-          innerRelationships = pattern.patternRelationships.map(p => p.variable).toSet,
+          innerRelationships = pattern.relationshipVariableGroupings.map(_.singleton),
           previouslyBoundRelationships = previouslyBoundRelationships,
           previouslyBoundRelationshipGroups = previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections = reverseGroupVariableProjections,

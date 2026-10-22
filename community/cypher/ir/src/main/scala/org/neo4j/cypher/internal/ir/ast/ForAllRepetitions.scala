@@ -76,9 +76,10 @@ object ForAllRepetitions {
     val groupVariableAnchor =
       predicate.dependencies.flatMap(v => VariableGrouping.singletonToGroup(qpp.variableGroupings, v))
         .minOption(Ordering.by[LogicalVariable, String](_.name))
-        .getOrElse(qpp.groupVariables.min(
+        .orElse(qpp.groupVariables.minOption(
           Ordering.by[LogicalVariable, String](_.name)
         )) // if the predicate doesn't use any QPP variables, just pick one
+        .getOrElse(qpp.left) // a QPP nested inside another one may expose no groupings of its own
 
     val astVariableGroupings = qpp.variableGroupings.map { irGrouping =>
       expressions.VariableGrouping(

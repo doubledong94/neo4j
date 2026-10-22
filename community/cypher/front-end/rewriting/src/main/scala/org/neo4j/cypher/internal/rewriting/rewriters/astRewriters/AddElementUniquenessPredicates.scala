@@ -377,11 +377,12 @@ case object AddElementUniquenessPredicates extends AddPathPredicates[NodeConnect
       case qpp: QuantifiedPath =>
         acc =>
           TraverseChildrenNewAccForSiblings(
-            Seq.empty[SingleRelationship],
+            Seq.empty[NodeConnection],
             innerAcc => {
               // Make sure that predicates we generate for QPPs use the group variable, not the singleton variable.
               // To ensure this, we need to change the position to that of the QPP.
-              val innerRelsWithFixedPositions = innerAcc.asInstanceOf[Seq[SingleRelationship]]
+              // A nested QPP is collected as a RelationshipGroup, which we flatten into the enclosing group.
+              val innerRelsWithFixedPositions = flattenToSingleRelationships(innerAcc)
                 .map(x => x.copy(variable = x.variable.withPosition(qpp.position)))
               acc :+ RelationshipGroup(innerRelsWithFixedPositions, qpp.quantifier.canBeEmpty)
             }
@@ -403,6 +404,12 @@ case object AddElementUniquenessPredicates extends AddPathPredicates[NodeConnect
             optIdent.getOrElse(throw new IllegalStateException("This rewriter cannot work with unnamed patterns"))
           TraverseChildren(acc :+ RelationshipGroup(Seq(SingleRelationship(ident, labelExpression)), canBeEmpty(range)))
         }
+    }
+
+  private def flattenToSingleRelationships(nodeConnections: Seq[NodeConnection]): Seq[SingleRelationship] =
+    nodeConnections.flatMap {
+      case single: SingleRelationship => Seq(single)
+      case group: RelationshipGroup   => group.innerRelationships
     }
 
   private def createPredicatesForNodes(

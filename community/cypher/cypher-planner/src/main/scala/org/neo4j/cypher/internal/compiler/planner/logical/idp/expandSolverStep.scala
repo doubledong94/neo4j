@@ -619,7 +619,7 @@ object expandSolverStep {
               // We do this because predicates using only these can also be inlined.
               // See `getExtraRelationshipPredicates` in ConvertToNFA.
               val extraRelVariableGroupings =
-                qpp.patternRelationships.toSet[PatternRelationship]
+                qpp.allPatternRelationships.toSet
                   .map(pr => pr.boundaryNodesSet + pr.variable)
                   .map { singletonVariables =>
                     val variableGroupings = qpp.variableGroupings

@@ -22,6 +22,7 @@ package org.neo4j.cypher.internal.runtime.slotted.expressions
 import org.neo4j.collection.trackable.HeapTrackingLongHashSet
 import org.neo4j.cypher.internal.physicalplanning.Slot
 import org.neo4j.cypher.internal.physicalplanning.SlotConfigurationUtils.makeGetPrimitiveRelationshipFromSlotFunctionFor
+import org.neo4j.cypher.internal.runtime.CastSupport.castOrFail
 import org.neo4j.cypher.internal.runtime.ReadableRow
 import org.neo4j.cypher.internal.runtime.RuntimeMetadataValue
 import org.neo4j.cypher.internal.runtime.interpreted.commands.AstNode
@@ -31,6 +32,8 @@ import org.neo4j.util.CalledFromGeneratedCode
 import org.neo4j.values.AnyValue
 import org.neo4j.values.storable.BooleanValue
 import org.neo4j.values.storable.Values.booleanValue
+import org.neo4j.values.virtual.ListValue
+import org.neo4j.values.virtual.VirtualRelationshipValue
 
 case class TrailRelationshipsUniqueExpression(trailStateMetadataSlotOffset: Int, innerRelationship: Slot)
     extends Expression
@@ -46,7 +49,19 @@ case class TrailRelationshipsUniqueExpression(trailStateMetadataSlotOffset: Int,
 
   private def allRelationshipsSeenUnique(row: ReadableRow): Boolean = {
     val relationshipsSeen = TrailState.fromMetadata(row.getRefAt(trailStateMetadataSlotOffset)).relationshipsSeen
-    !relationshipsSeen.contains(innerRelGetter.applyAsLong(row))
+    if (innerRelationship.isLongSlot) {
+      !relationshipsSeen.contains(innerRelGetter.applyAsLong(row))
+    } else {
+      // A nested quantified path pattern is exposed through its group variable, which holds a list of the
+      // relationships bound by one repetition of the inner pattern. Every relationship of that list must be
+      // unique with respect to the relationships seen so far.
+      val relationships = castOrFail[ListValue](row.getRefAt(innerRelationship.offset)).iterator()
+      var unique = true
+      while (unique && relationships.hasNext) {
+        unique = !relationshipsSeen.contains(castOrFail[VirtualRelationshipValue](relationships.next()).id())
+      }
+      unique
+    }
   }
 }
 

@@ -37,7 +37,6 @@ import org.neo4j.cypher.internal.logical.plans.NFA.State
 import org.neo4j.cypher.internal.logical.plans.NFA.Transition
 import org.neo4j.cypher.internal.macros.AssertMacros3
 import org.neo4j.cypher.internal.util.InputPosition
-import org.neo4j.cypher.internal.util.Repetition
 
 import scala.collection.immutable.ArraySeq
 
@@ -61,10 +60,10 @@ object NFA {
                 case SimplePatternLength        => pathLength.addMin(1).addMax(Some(1))
                 case VarPatternLength(min, max) => pathLength.addMin(min).addMax(max)
               }
-            case QuantifiedPathPattern(_, _, _, _, Repetition(qppMin, qppMax), _, relationshipVariableGroupings) =>
-              val amountOfRelationships = relationshipVariableGroupings.size
-              val max = qppMax.limit.map(_.toInt * amountOfRelationships)
-              val min = qppMin.toInt * amountOfRelationships
+            case qpp: QuantifiedPathPattern =>
+              val PathLength(innerMin, innerMax) = from(NodeConnections(qpp.patternRelationships))
+              val min = qpp.repetition.min.toInt * innerMin
+              val max = qpp.repetition.max.limit.map(outerMax => innerMax.map(_ * outerMax.toInt)).flatten
               pathLength.addMin(min).addMax(max)
           }
 

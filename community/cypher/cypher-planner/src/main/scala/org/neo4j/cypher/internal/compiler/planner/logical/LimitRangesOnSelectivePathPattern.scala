@@ -92,7 +92,7 @@ case class LimitRangesOnSelectivePathPattern(rewriteQuantifiersAbove: Int) {
     extractedPredicates: Set[Expression],
     qpp: QuantifiedPathPattern
   ): (Set[Expression], QuantifiedPathPattern) = {
-    val amountOfRelationships = qpp.relationshipVariableGroupings.size
+    val amountOfRelationships = qpp.allPatternRelationships.size
     val startRelationship = qpp.relationshipVariableGroupings.headOption.map(_.group)
     val (newMin, maybeMinExpression) =
       if (qpp.repetition.min * amountOfRelationships < rewriteQuantifiersAbove)

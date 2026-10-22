@@ -229,7 +229,17 @@ case class StatefulShortestToFindShortestRewriter(
   }
 
   private def hasSingleRelPatternMinLengthOneOrZero(qpp: QuantifiedPathPattern): Boolean =
-    qpp.patternRelationships.size == 1 && qpp.repetition.min < 2
+    (qpp.patternRelationships.size == 1) && qpp.patternRelationships.head.isInstanceOf[PatternRelationship] &&
+      qpp.repetition.min < 2
+
+  private def singlePatternRelationship(qpp: QuantifiedPathPattern): PatternRelationship =
+    qpp.patternRelationships.head match {
+      case pr: PatternRelationship => pr
+      case other =>
+        throw new IllegalStateException(
+          s"Expected a single PatternRelationship, but found $other"
+        )
+    }
 
   private def sppQppToFindShortest(
     ssp: StatefulShortestPath,
@@ -257,7 +267,7 @@ case class StatefulShortestToFindShortestRewriter(
           predicatesOutsideRepetition =
             solveds.get(ssp.source.id).asSinglePlannerQuery.queryGraph.selections.flatPredicates
         ),
-        pathDirection = qpp.patternRelationships.head.dir,
+        pathDirection = singlePatternRelationship(qpp).dir,
         pathRepetition = qpp.repetition,
         anonymousVariableNameGenerator = anonymousVariableNameGenerator
       )
@@ -370,7 +380,7 @@ case class StatefulShortestToFindShortestRewriter(
     qpp: QuantifiedPathPattern
   ): ShortestRelationshipPattern = {
     val (outerFrom, outerTo) = (qpp.leftBinding.outer, qpp.rightBinding.outer)
-    val qppPatternRelationship = qpp.patternRelationships.head
+    val qppPatternRelationship = singlePatternRelationship(qpp)
     val varPatternLength = VarPatternLength(qpp.repetition.min.toInt, qpp.repetition.max.limit.map(_.toInt))
     val shortestPathsPatternPart = createShortestPathsPatternPart(
       getRange(qpp),

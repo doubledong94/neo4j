@@ -287,10 +287,22 @@ case class RepeatSlottedPipe(
         var i = 0
         while (i < acyclicState.constraint.innerRelationships.length) {
           val r = acyclicState.constraint.innerRelationships(i)
-          if (!newRelationshipsSeen.add(rowForReading.getLongAt(r.offset))) {
-            throw new IllegalStateException(
-              "Method should only be called when all relationships are known to be unique"
-            )
+          if (r.isLongSlot) {
+            if (!newRelationshipsSeen.add(rowForReading.getLongAt(r.offset))) {
+              throw new IllegalStateException(
+                "Method should only be called when all relationships are known to be unique"
+              )
+            }
+          } else {
+            // A nested quantified path pattern exposes a list of relationships through its group variable.
+            val relationships = castOrFail[ListValue](rowForReading.getRefAt(r.offset)).iterator()
+            while (relationships.hasNext) {
+              if (!newRelationshipsSeen.add(castOrFail[VirtualRelationshipValue](relationships.next()).id())) {
+                throw new IllegalStateException(
+                  "Method should only be called when all relationships are known to be unique"
+                )
+              }
+            }
           }
           i += 1
         }
@@ -342,10 +354,22 @@ case class RepeatSlottedPipe(
         var i = 0
         while (i < trailState.constraint.innerRelationships.length) {
           val r = trailState.constraint.innerRelationships(i)
-          if (!newSet.add(rowForReading.getLongAt(r.offset))) {
-            throw new IllegalStateException(
-              "Method should only be called when all relationships are known to be unique"
-            )
+          if (r.isLongSlot) {
+            if (!newSet.add(rowForReading.getLongAt(r.offset))) {
+              throw new IllegalStateException(
+                "Method should only be called when all relationships are known to be unique"
+              )
+            }
+          } else {
+            // A nested quantified path pattern exposes a list of relationships through its group variable.
+            val relationships = castOrFail[ListValue](rowForReading.getRefAt(r.offset)).iterator()
+            while (relationships.hasNext) {
+              if (!newSet.add(castOrFail[VirtualRelationshipValue](relationships.next()).id())) {
+                throw new IllegalStateException(
+                  "Method should only be called when all relationships are known to be unique"
+                )
+              }
+            }
           }
           i += 1
         }

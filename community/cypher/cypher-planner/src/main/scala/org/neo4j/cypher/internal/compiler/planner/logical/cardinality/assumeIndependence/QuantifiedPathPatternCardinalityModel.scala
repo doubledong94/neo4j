@@ -47,7 +47,6 @@ import org.neo4j.cypher.internal.util.Cardinality
 import org.neo4j.cypher.internal.util.Cardinality.NumericCardinality
 import org.neo4j.cypher.internal.util.Multiplier
 import org.neo4j.cypher.internal.util.Multiplier.NumericMultiplier
-import org.neo4j.cypher.internal.util.NonEmptyList
 import org.neo4j.cypher.internal.util.Rewriter
 import org.neo4j.cypher.internal.util.Selectivity
 import org.neo4j.cypher.internal.util.topDown
@@ -155,7 +154,7 @@ trait QuantifiedPathPatternCardinalityModel extends NodeCardinalityModel with Pa
     lazy val (predicatesSolvedForFirstIteration, otherPredicates) =
       partitionBoundarySolvedPredicates(quantifiedPathPattern, predicates, boundaryNodePredicates)
 
-    lazy val extraRelTypeInfo = quantifiedPathPattern.patternRelationships.collect {
+    lazy val extraRelTypeInfo = quantifiedPathPattern.allPatternRelationships.collect {
       case PatternRelationship(rel, _, _, Seq(relType), _) => rel -> relType
     }.toMap
 
@@ -176,7 +175,7 @@ trait QuantifiedPathPatternCardinalityModel extends NodeCardinalityModel with Pa
     object inferLabels {
 
       private lazy val nodeConnections: Seq[PatternRelationship] =
-        quantifiedPathPattern.patternRelationships.iterator.toSeq
+        quantifiedPathPattern.allPatternRelationships
 
       def apply(context: QueryGraphCardinalityContext)(labelInfo: LabelInfo)
         : (LabelInfo, QueryGraphCardinalityContext) = {
@@ -219,7 +218,7 @@ trait QuantifiedPathPatternCardinalityModel extends NodeCardinalityModel with Pa
           .updated(quantifiedPathPattern.rightBinding.inner, rightBindingInnerLabels)
       } pipe {
         case (iterationLabels, context) =>
-          getPatternRelationshipsCardinality(context, iterationLabels, quantifiedPathPattern.patternRelationships)
+          getPatternRelationshipsCardinality(context, iterationLabels, quantifiedPathPattern.allPatternRelationships)
       }
     }
 
@@ -276,7 +275,7 @@ trait QuantifiedPathPatternCardinalityModel extends NodeCardinalityModel with Pa
               getPatternRelationshipsCardinality(
                 context,
                 singleIterationLabels,
-                quantifiedPathPattern.patternRelationships
+                quantifiedPathPattern.allPatternRelationships
               )
             patternCardinality * uniquenessSelectivity * otherPredicatesSelectivity
 
@@ -392,7 +391,7 @@ trait QuantifiedPathPatternCardinalityModel extends NodeCardinalityModel with Pa
   private def getPatternRelationshipsCardinality(
     context: QueryGraphCardinalityContext,
     labelInfo: LabelInfo,
-    patternRelationships: NonEmptyList[PatternRelationship]
+    patternRelationships: Seq[PatternRelationship]
   ): Cardinality = {
     val firstRelationship = patternRelationships.head
     val firstRelationshipCardinality = getSimpleRelationshipCardinality(

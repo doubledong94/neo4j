@@ -343,29 +343,11 @@ class QuantifiedPathPatternsSemanticAnalysisTest extends NameBasedSemanticAnalys
   }
 
   test("MATCH (x) (((a)-[b]->(c))*)+ RETURN count(*)") {
-    run().hasError(
-      ErrorGqlStatusObjectImplementation.from(GqlStatusInfoCodes.STATUS_42001)
-        .atPosition(11, 1, 12)
-        .withCause(ErrorGqlStatusObjectImplementation.from(GqlStatusInfoCodes.STATUS_42I12)
-          .atPosition(11, 1, 12)
-          .build())
-        .build(),
-      "Quantified path patterns are not allowed to be nested.",
-      InputPosition(11, 1, 12)
-    )
+    run().hasNoErrors
   }
 
   test("MATCH ((a)-->(b)-[r]->*(c))+ RETURN count(*)") {
-    run().hasError(
-      ErrorGqlStatusObjectImplementation.from(GqlStatusInfoCodes.STATUS_42001)
-        .atPosition(16, 1, 17)
-        .withCause(ErrorGqlStatusObjectImplementation.from(GqlStatusInfoCodes.STATUS_42I12)
-          .atPosition(16, 1, 17)
-          .build())
-        .build(),
-      "Quantified path patterns are not allowed to be nested.",
-      InputPosition(16, 1, 17)
-    )
+    run().hasNoErrors
   }
 
   test("MATCH ((a)-[*]->(b))+ RETURN count(*)") {

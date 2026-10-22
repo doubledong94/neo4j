@@ -254,7 +254,7 @@ case class RepeatPipe(
         var i = 0
         while (allRelationshipsUnique && i < innerRelationshipsArray.length) {
           val r = innerRelationshipsArray(i)
-          allRelationshipsUnique = newSet.add(castOrFail[VirtualRelationshipValue](row.getByName(r)).id())
+          allRelationshipsUnique = forEachRelationshipId(row.getByName(r))(newSet.add)
           i += 1
         }
 
@@ -295,7 +295,7 @@ case class RepeatPipe(
         i = 0
         while (i < innerRelationshipsArray.length) {
           val r = innerRelationshipsArray(i)
-          allRelationshipsUnique = newRelationships.add(castOrFail[VirtualRelationshipValue](row.getByName(r)).id())
+          allRelationshipsUnique = forEachRelationshipId(row.getByName(r))(newRelationships.add)
           i += 1
         }
 
@@ -326,6 +326,25 @@ case class RepeatPipe(
     }
   }
 
+  /**
+   * A nested quantified path pattern is exposed at the enclosing level through its group variable, which holds a
+   * list of the relationships bound by one repetition of the inner pattern. A plain relationship is treated as a
+   * singleton list. Runs `f` for every relationship id, short-circuiting as soon as `f` returns false.
+   */
+  private def forEachRelationshipId(value: AnyValue)(f: Long => Boolean): Boolean = {
+    value match {
+      case list: ListValue =>
+        val it = list.iterator()
+        var result = true
+        while (result && it.hasNext) {
+          result = f(castOrFail[VirtualRelationshipValue](it.next()).id())
+        }
+        result
+      case rel =>
+        f(castOrFail[VirtualRelationshipValue](rel).id())
+    }
+  }
+
   private def filterRow(row: CypherRow, repeatState: LegacyRepeatState): Boolean =
     repeatState match {
       case acyclicState: AcyclicLegacyRepeatState =>
@@ -335,8 +354,9 @@ case class RepeatPipe(
         val innerRelationshipsSeen = collection.mutable.Set[Long]()
         while (relationshipsAreUnique && i < innerRelationshipsArray.length) {
           val r = innerRelationshipsArray(i)
-          val rel = castOrFail[VirtualRelationshipValue](row.getByName(r)).id()
-          relationshipsAreUnique = !acyclicState.relationshipsSeen.contains(rel) && innerRelationshipsSeen.add(rel)
+          relationshipsAreUnique = forEachRelationshipId(row.getByName(r)) { rel =>
+            !acyclicState.relationshipsSeen.contains(rel) && innerRelationshipsSeen.add(rel)
+          }
           i += 1
         }
         val innerNodesArray = acyclicState.constraint.innerNodes
@@ -363,8 +383,9 @@ case class RepeatPipe(
         val innerRelationshipsSeen = collection.mutable.Set[Long]()
         while (relationshipsAreUnique && i < innerRelationshipsArray.length) {
           val r = innerRelationshipsArray(i)
-          val rel = castOrFail[VirtualRelationshipValue](row.getByName(r)).id()
-          relationshipsAreUnique = !trailState.relationshipsSeen.contains(rel) && innerRelationshipsSeen.add(rel)
+          relationshipsAreUnique = forEachRelationshipId(row.getByName(r)) { rel =>
+            !trailState.relationshipsSeen.contains(rel) && innerRelationshipsSeen.add(rel)
+          }
           i += 1
         }
         relationshipsAreUnique

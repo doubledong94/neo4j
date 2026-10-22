@@ -147,7 +147,7 @@ case class IDPQPPInnerPlanner(context: LogicalPlanningContext) extends QPPInnerP
     var (updatedLabelInfoInner, updatedContext) = context.staticComponents.labelInferenceStrategy.inferLabels(
       context,
       labelInfoInner,
-      qpp.patternRelationships.toIndexedSeq
+      qpp.allPatternRelationships
     )
 
     def inferLabelInfoFromJuxtaposedNodes(): LabelInfo = {

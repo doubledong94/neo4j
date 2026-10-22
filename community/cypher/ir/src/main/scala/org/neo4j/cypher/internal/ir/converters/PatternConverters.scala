@@ -223,7 +223,8 @@ class PatternConverters(anonymousVariableNameGenerator: AnonymousVariableNameGen
           QuantifiedPathPatternConverters.convertQuantifiedPath(
             outerLeft = previousRightMostNode,
             quantifiedPath = quantifiedPath,
-            outerRight = nextLeftMostNode
+            outerRight = nextLeftMostNode,
+            convertElement = convertPatternElement
           )
 
         ExhaustivePathPattern.NodeConnections(

@@ -343,10 +343,6 @@ object SemanticPatternCheck extends SemanticAnalysisTooling {
       case q @ QuantifiedPath(pattern, quantifier, _, _) =>
         def checkContainedPatterns: SemanticCheck =
           pattern.folder.treeFold(SemanticCheck.success) {
-            case quant: QuantifiedPath => acc =>
-                SkipChildren(acc chain SemanticError.nestedQPP(
-                  quant.position
-                ))
             case shortestPaths: ShortestPathsPatternPart => acc =>
                 SkipChildren(acc chain SemanticError.shortestPathInsideQPP(shortestPaths.position))
             case rel @ RelationshipPattern(_, _, Some(_), _, _, _) => acc =>

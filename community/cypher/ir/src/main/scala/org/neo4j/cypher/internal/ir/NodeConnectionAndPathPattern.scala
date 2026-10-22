@@ -216,15 +216,28 @@ case class NodeBinding(inner: LogicalVariable, outer: LogicalVariable) {
 final case class QuantifiedPathPattern(
   leftBinding: NodeBinding,
   rightBinding: NodeBinding,
-  patternRelationships: NonEmptyList[PatternRelationship],
+  patternRelationships: NonEmptyList[ExhaustiveNodeConnection],
   selections: Selections = Selections(),
   repetition: Repetition,
   nodeVariableGroupings: Set[VariableGrouping],
   relationshipVariableGroupings: Set[VariableGrouping]
 ) extends ExhaustiveNodeConnection {
 
+  /**
+   * All simple [[PatternRelationship]]s contained in this QPP, recursively descending into nested QPPs.
+   */
+  def allPatternRelationships: Seq[PatternRelationship] =
+    patternRelationships.toIndexedSeq.flatMap {
+      case pr: PatternRelationship    => Seq(pr)
+      case qpp: QuantifiedPathPattern => qpp.allPatternRelationships
+    }
+
   // all pattern nodes are part of a relationship because a QPP has always at least one relationship and is linear in shape
-  val patternNodes: Set[LogicalVariable] = patternRelationships.iterator.flatMap(_.boundaryNodesSet).toSet
+  val patternNodes: Set[LogicalVariable] = patternRelationships.iterator.flatMap {
+    case pr: PatternRelationship => pr.boundaryNodesSet
+    // A nested QPP contributes all of its own pattern nodes plus its boundary nodes, which connect it to the enclosing pattern
+    case qpp: QuantifiedPathPattern => qpp.patternNodes ++ qpp.boundaryNodesSet
+  }.toSet
 
   // all variables are meant as singletons except those in the groupings
   AssertMacros3.checkOnlyWhenAssertionsAreEnabled(
@@ -244,7 +257,7 @@ final case class QuantifiedPathPattern(
 
   AssertMacros3.checkOnlyWhenAssertionsAreEnabled(
     relationshipVariableGroupings.forall(grouping =>
-      patternRelationships.map(_.variable).contains(grouping.singleton)
+      allPatternRelationships.map(_.variable).contains(grouping.singleton)
     ),
     s"Not all singleton relationship variables ${relationshipVariableGroupings.map(_.singleton)} were relationship names"
   )
@@ -264,17 +277,28 @@ final case class QuantifiedPathPattern(
     copy(rightBinding = rightBinding.copy(outer = right))
 
   override def pathVariables: Seq[PathVariable] = {
+    val lastRight = patternRelationships.last match {
+      case pr: PatternRelationship    => pr.right
+      case qpp: QuantifiedPathPattern => qpp.right
+    }
     val rightTail: Seq[PathVariable] =
-      VariableGrouping.singletonToGroup(nodeVariableGroupings, patternRelationships.last.right)
+      VariableGrouping.singletonToGroup(nodeVariableGroupings, lastRight)
         .map(NodePathVariable.apply) ++: Seq(NodePathVariable(right))
 
     NodePathVariable(left) +: patternRelationships.iterator.foldRight(rightTail) {
-      case (rel, acc) =>
-        VariableGrouping.singletonToGroup(nodeVariableGroupings, rel.left)
+      case (pr: PatternRelationship, acc) =>
+        VariableGrouping.singletonToGroup(nodeVariableGroupings, pr.left)
           .map(NodePathVariable.apply) ++:
-          VariableGrouping.singletonToGroup(relationshipVariableGroupings, rel.variable)
+          VariableGrouping.singletonToGroup(relationshipVariableGroupings, pr.variable)
             .map(RelationshipPathVariable.apply) ++:
           acc
+      case (qpp: QuantifiedPathPattern, acc) =>
+        // A nested QPP exposes the groupings of its innermost pattern; the enclosing QPP re-exposes them,
+        // so they need to be part of its path variables as well.
+        val nestedGroupVariables: Seq[PathVariable] =
+          nodeVariableGroupings.iterator.map(grouping => NodePathVariable(grouping.group)).toSeq ++
+            relationshipVariableGroupings.iterator.map(grouping => RelationshipPathVariable(grouping.group)).toSeq
+        nestedGroupVariables ++: acc
     }
   }
 
@@ -295,10 +319,8 @@ final case class QuantifiedPathPattern(
    * MATCH (a)-[r]->(b), (b)-[s]->(c) WHERE a:L
    */
   lazy val asQueryGraph: QueryGraph =
-    QueryGraph
-      .empty
-      .addPatternRelationships(patternRelationships.toSet)
-      .addPatternNodes(patternNodes.toList: _*)
+    patternRelationships.iterator
+      .foldLeft(QueryGraph.empty)((qg, connection) => qg.addNodeConnection(connection))
       .addSelections(selections)
 
   /**

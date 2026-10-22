@@ -31,6 +31,7 @@ import org.neo4j.cypher.internal.frontend.phases.Namespacer
 import org.neo4j.cypher.internal.frontend.phases.Transformer
 import org.neo4j.cypher.internal.frontend.phases.factories.PlanPipelineTransformerConfig
 import org.neo4j.cypher.internal.frontend.phases.factories.PlanPipelineTransformerFactory
+import org.neo4j.cypher.internal.ir.ExhaustiveNodeConnection
 import org.neo4j.cypher.internal.ir.PatternRelationship
 import org.neo4j.cypher.internal.ir.PlannerQuery
 import org.neo4j.cypher.internal.ir.Predicate
@@ -84,19 +85,35 @@ case object InlineRelationshipTypePredicates extends PlannerQueryRewriter with S
 
         case qpp: QuantifiedPathPattern =>
           val typePredicates = findRelationshipTypePredicatesPerSymbol(qpp.asQueryGraph)
-
-          val inlinedRelationships = qpp.patternRelationships.map(tryToInline(typePredicates))
-
-          qpp.copy(
-            patternRelationships = inlinedRelationships.map(_.rel),
-            selections = {
-              val inlinedPredicates: Set[Predicate] = inlinedRelationships.iterator.flatMap(_.inlinedPredicate).toSet
-              qpp.selections.filter(p => !inlinedPredicates.contains(p))
-            }
-          )
+          inlineQuantifiedPathPattern(typePredicates)(qpp)._1
       }
     )
   }
+
+  private def inlineQuantifiedPathPattern(
+    typePredicates: Map[LogicalVariable, (Predicate, Seq[RelTypeName])]
+  )(qpp: QuantifiedPathPattern): (QuantifiedPathPattern, Set[Predicate]) = {
+    val inlinedConnections = qpp.patternRelationships.map(inlineConnection(typePredicates))
+    val inlinedPredicates: Set[Predicate] = inlinedConnections.iterator.flatMap(_._2).toSet
+    (
+      qpp.copy(
+        patternRelationships = inlinedConnections.map(_._1),
+        selections = qpp.selections.filter(p => !inlinedPredicates.contains(p))
+      ),
+      inlinedPredicates
+    )
+  }
+
+  private def inlineConnection(
+    typePredicates: Map[LogicalVariable, (Predicate, Seq[RelTypeName])]
+  )(connection: ExhaustiveNodeConnection): (ExhaustiveNodeConnection, Set[Predicate]) =
+    connection match {
+      case rel: PatternRelationship =>
+        val inlined = tryToInline(typePredicates)(rel)
+        (inlined.rel, inlined.inlinedPredicate.toSet)
+      case nested: QuantifiedPathPattern =>
+        inlineQuantifiedPathPattern(typePredicates)(nested)
+    }
 
   private def findRelationshipTypePredicatesPerSymbol(qg: QueryGraph)
     : Map[LogicalVariable, (Predicate, Seq[RelTypeName])] = {
