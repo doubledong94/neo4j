@@ -62,19 +62,19 @@ case object EmptyRelationshipListEndpointProjection extends PlannerQueryRewriter
           val (newRels, predicates) = rels
             .zipWithIndex.map {
               // Cases where the relationship is repeated, but across multiple query graphs.
-              case (rel @ PatternRelationship(name, nodes, _, _, length), _)
+              case (rel @ PatternRelationship(name, nodes, _, _, length, _), _)
                 if relationshipQualifies(qg, nodes, length) &&
                   // Where the relationship is an argument
                   qg.argumentIds.contains(name) =>
                 copyRelWithPredicates(from, rel, name, qg.selections)
 
               // Cases where a legacy var-length relationship has the same name as a relationship group variable
-              case (rel @ PatternRelationship(name, _, _, _, _: VarPatternLength), _)
+              case (rel @ PatternRelationship(name, _, _, _, _: VarPatternLength, _), _)
                 if relGroupNames.contains(rel.variable) =>
                 copyRelWithPredicates(from, rel, name, qg.selections)
 
               // Cases where the relationship is repeated in the same query graph.
-              case (rel @ PatternRelationship(name, nodes, _, _, length), i)
+              case (rel @ PatternRelationship(name, nodes, _, _, length, _), i)
                 if relationshipQualifies(qg, nodes, length) =>
                 // Where the relationship is defined more than once in this query graph.
                 // We look in the remainder of the sortedRels list to find a copy with the same name.

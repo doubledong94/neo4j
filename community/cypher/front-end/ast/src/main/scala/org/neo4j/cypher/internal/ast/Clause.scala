@@ -367,7 +367,7 @@ sealed trait Clause extends ASTNode with SemanticCheckable with SemanticAnalysis
             _.sortLabelExpressionIntoPartition(le, state.expressionType(entity).specified)
           ))(acc))
 
-      case RelationshipPattern(_, Some(le), _, _, _, _) => acc =>
+      case RelationshipPattern(_, Some(le), _, _, _, _, _) => acc =>
           TraverseChildren(acc.sortLabelExpressionIntoPartition(le, CTRelationship))
     }
 
@@ -377,7 +377,7 @@ sealed trait Clause extends ASTNode with SemanticCheckable with SemanticAnalysis
 
   private def checkIfMixingLegacyVarLengthWithQPPs: SemanticCheck = {
     val legacyVarLengthRelationships = this.folder.treeFold(Seq.empty[RelationshipPattern]) {
-      case r @ RelationshipPattern(_, _, Some(_), _, _, _) => acc =>
+      case r @ RelationshipPattern(_, _, Some(_), _, _, _, _) => acc =>
           TraverseChildren(acc :+ r)
       // We should traverse into subqeries to implement CIP-40 correctly.
       // We don't, because changing this would break backwards compatibility.
@@ -1334,7 +1334,7 @@ case class Match(
             SkipChildren(acc ++ collectPropertiesInPropertyMap(properties) ++ predicate.map(
               collectPropertiesInPredicates(variable, _)
             ).getOrElse(Seq.empty[String]))
-        case RelationshipPattern(Some(Variable(id)), _, _, properties, predicate, _) if variable == id =>
+        case RelationshipPattern(Some(Variable(id)), _, _, properties, predicate, _, _) if variable == id =>
           acc =>
             SkipChildren(acc ++ collectPropertiesInPropertyMap(properties) ++ predicate.map(
               collectPropertiesInPredicates(variable, _)
@@ -1428,7 +1428,7 @@ case class Match(
 
   private def getLabelAndRelTypePredicates(variable: String): Seq[String] = {
     val inlinedRelTypes = pattern.folder.fold(Seq.empty[String]) {
-      case RelationshipPattern(Some(Variable(id)), Some(labelExpression), _, _, _, _) if variable == id =>
+      case RelationshipPattern(Some(Variable(id)), Some(labelExpression), _, _, _, _, _) if variable == id =>
         list => list ++ getLabelsFromLabelExpression(labelExpression)
     }
 

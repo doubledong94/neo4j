@@ -125,11 +125,11 @@ class LeafPlanningIntegrationTest extends CypherPlannerTestSuite with LogicalPla
 
   private val nodeIndexSeekCost
     : PartialFunction[(LogicalPlan, QueryGraphSolverInput, Cardinalities, ProvidedOrders), Cost] = {
-    case (_: AllNodesScan, _, _, _)                    => 1000000000.0
-    case (_: NodeIndexSeek, _, _, _)                   => 0.1
-    case (Expand(plan, _, _, _, _, _, _), input, c, p) => nodeIndexSeekCost((plan, input, c, p))
-    case (Selection(_, plan), input, c, p)             => nodeIndexSeekCost((plan, input, c, p))
-    case _                                             => 1000.0
+    case (_: AllNodesScan, _, _, _)                       => 1000000000.0
+    case (_: NodeIndexSeek, _, _, _)                      => 0.1
+    case (Expand(plan, _, _, _, _, _, _, _), input, c, p) => nodeIndexSeekCost((plan, input, c, p))
+    case (Selection(_, plan), input, c, p)                => nodeIndexSeekCost((plan, input, c, p))
+    case _                                                => 1000.0
   }
 
   private def promoteOnlyPlansSolving(
@@ -1419,7 +1419,7 @@ class LeafPlanningIntegrationTest extends CypherPlannerTestSuite with LogicalPla
       indexOn("Person", "name")
       cost = nodeIndexSeekCost
     } getLogicalPlanFor "MATCH (a:Person)-->(b) WHERE a.name = b.prop AND b.prop = 42 RETURN b")._1 should beLike {
-      case Selection(_, Expand(NodeIndexSeek(LogicalVariable("a"), _, _, _, _, _, _, _), _, _, _, _, _, _)) => ()
+      case Selection(_, Expand(NodeIndexSeek(LogicalVariable("a"), _, _, _, _, _, _, _), _, _, _, _, _, _, _)) => ()
     }
   }
 
@@ -1428,7 +1428,7 @@ class LeafPlanningIntegrationTest extends CypherPlannerTestSuite with LogicalPla
       indexOn("Person", "name")
       cost = nodeIndexSeekCost
     } getLogicalPlanFor "MATCH (a:Person)-->(b) WHERE b.prop = a.name AND b.prop = 42 RETURN b")._1 should beLike {
-      case Selection(_, Expand(NodeIndexSeek(LogicalVariable("a"), _, _, _, _, _, _, _), _, _, _, _, _, _)) => ()
+      case Selection(_, Expand(NodeIndexSeek(LogicalVariable("a"), _, _, _, _, _, _, _), _, _, _, _, _, _, _)) => ()
     }
   }
 

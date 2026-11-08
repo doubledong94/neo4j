@@ -19,6 +19,7 @@
  */
 package org.neo4j.cypher.internal.ir.converters
 
+import org.neo4j.cypher.internal.expressions.Expression
 import org.neo4j.cypher.internal.expressions.FixedQuantifier
 import org.neo4j.cypher.internal.expressions.GraphPatternQuantifier
 import org.neo4j.cypher.internal.expressions.IntervalQuantifier
@@ -56,7 +57,7 @@ object QuantifiedPathPatternConverters {
   ): QuantifiedPathPattern = {
     val patternPart = getPathPattern(quantifiedPath)
     val patternElement = patternPart.element
-    val connections = getConnections(patternElement, convertElement)
+    val (connections, parenthesizedPathPredicates) = getConnections(patternElement, convertElement)
     val groupings = VariableGroupings.build(quantifiedPath.variableGroupings)
     connections
       .map(connection => QuantifiedPathPatternBuilder.fromConnection(groupings, connection))
@@ -64,7 +65,9 @@ object QuantifiedPathPatternConverters {
       .build(
         outerLeft = outerLeft,
         outerRight = outerRight,
-        selections = Selections.from(quantifiedPath.optionalWhereExpression),
+        selections = Selections.from(
+          quantifiedPath.optionalWhereExpression.toSeq ++ parenthesizedPathPredicates
+        ),
         repetition = convertGraphPatternQuantifier(quantifiedPath.quantifier)
       )
   }
@@ -101,16 +104,22 @@ object QuantifiedPathPatternConverters {
   private def getConnections(
     patternElement: PatternElement,
     convertElement: PatternElement => ExhaustivePathPattern[ExhaustiveNodeConnection]
-  ): NonEmptyList[ExhaustiveNodeConnection] =
+  ): (NonEmptyList[ExhaustiveNodeConnection], Seq[Expression]) =
     patternElement match {
       case relationshipChain: RelationshipChain =>
-        SimplePatternConverters.convertRelationshipChain(relationshipChain)
+        (SimplePatternConverters.convertRelationshipChain(relationshipChain), Seq.empty)
       case PathConcatenation(_) =>
-        convertToConnections(patternElement, convertElement)
+        (convertToConnections(patternElement, convertElement), Seq.empty)
       case quantifiedPath: QuantifiedPath =>
-        convertToConnections(getPathPattern(quantifiedPath).element, convertElement)
-      case ParenthesizedPath(part, _) =>
-        convertToConnections(part.element, convertElement)
+        val (connections, innerPredicates) =
+          getConnections(getPathPattern(quantifiedPath).element, convertElement)
+        (connections, quantifiedPath.optionalWhereExpression.toSeq ++ innerPredicates)
+      case ParenthesizedPath(part, optionalWhereClause) =>
+        // UnwrapParenthesizedPath normally moves the predicate of a parenthesized path to the enclosing
+        // quantified path pattern. It does not do that inside selective path patterns, so we have to keep
+        // the predicate as a selection of this quantified path pattern, where it is evaluated per repetition.
+        val (connections, innerPredicates) = getConnections(part.element, convertElement)
+        (connections, optionalWhereClause.toSeq ++ innerPredicates)
       case _: NodePattern =>
         throw new IllegalArgumentException("quantified path patterns must contain at least one relationship")
     }

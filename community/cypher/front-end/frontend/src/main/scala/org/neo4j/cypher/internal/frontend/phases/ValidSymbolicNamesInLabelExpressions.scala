@@ -46,7 +46,7 @@ case object ValidSymbolicNamesInLabelExpressions extends StatementValidatingCond
       case NodePattern(_, Some(labelExpression), _, _) =>
         restrictSymbolicNames("node pattern", labelExpression, cancellationChecker, _.isInstanceOf[LabelName])
 
-      case RelationshipPattern(_, Some(labelExpression), _, _, _, _) =>
+      case RelationshipPattern(_, Some(labelExpression), _, _, _, _, _) =>
         restrictSymbolicNames("relationship pattern", labelExpression, cancellationChecker, _.isInstanceOf[RelTypeName])
 
       case LabelExpressionPredicate(_, labelExpression) =>

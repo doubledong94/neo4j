@@ -109,6 +109,35 @@ class PathSelectorsSemanticAnalysisTest extends NameBasedSemanticAnalysisTestSui
     }
   }
 
+  // Nested quantified path patterns that bind variables are not supported with a selective selector.
+  Seq(
+    "MATCH ANY SHORTEST ((start) (((a)-[r]->(b)){2}){2} (end)) RETURN count(*)",
+    "MATCH ALL SHORTEST ((start) (((a)-[r]->(b)){2,3}){1,2} (end)) RETURN count(*)",
+    "MATCH ANY 3 PATHS ((start) (((a)-[r]->(b)){2}){2} (end)) RETURN count(*)"
+  ).foreach { query =>
+    test(query) {
+      run().hasErrorMessages(
+        "Nested quantified path patterns that bind variables or have a predicate are not supported " +
+          "together with shortest/any path selection."
+      )
+    }
+  }
+
+  // ... but anonymous nested quantified path patterns are allowed.
+  test("MATCH ANY SHORTEST ((start) ((()-->()){2}){2} (end)) RETURN count(*)") {
+    run().hasNoErrors
+  }
+
+  // A predicate carried by a parenthesized path in the body counts as a predicate of the nested pattern.
+  test(
+    "MATCH ANY SHORTEST ((start) ((((a)-[r]->(b) WHERE a.prop = b.prop)){2}){2} (end)) RETURN count(*)"
+  ) {
+    run().hasErrorMessages(
+      "Nested quantified path patterns that bind variables or have a predicate are not supported " +
+        "together with shortest/any path selection."
+    )
+  }
+
   // Selectors with disallowed counts
 
   Seq(

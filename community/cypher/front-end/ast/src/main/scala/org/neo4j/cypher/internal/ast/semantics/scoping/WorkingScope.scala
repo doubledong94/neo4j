@@ -377,9 +377,9 @@ object PatternScope {
   object PatternVariable {
 
     def unapply(elem: PatternAtom): Option[LogicalVariable] = elem match {
-      case NodePattern(variable, _, _, _)               => variable
-      case RelationshipPattern(variable, _, _, _, _, _) => variable
-      case _                                            => None
+      case NodePattern(variable, _, _, _)                  => variable
+      case RelationshipPattern(variable, _, _, _, _, _, _) => variable
+      case _                                               => None
     }
   }
 

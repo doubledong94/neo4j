@@ -35,10 +35,10 @@ case class PropertyPredicateNormalizer(anonymousVariableNameGenerator: Anonymous
     case NodePattern(Some(id), _, Some(props: MapExpression), _) =>
       propertyPredicates(id, props)
 
-    case RelationshipPattern(Some(id), _, None, Some(props: MapExpression), _, _) =>
+    case RelationshipPattern(Some(id), _, None, Some(props: MapExpression), _, _, _) =>
       propertyPredicates(id, props)
 
-    case RelationshipPattern(Some(id), _, Some(_), Some(props: MapExpression), _, _) if props.items.nonEmpty =>
+    case RelationshipPattern(Some(id), _, Some(_), Some(props: MapExpression), _, _, _) if props.items.nonEmpty =>
       Vector(varLengthPropertyPredicates(id, props))
   }
 
@@ -47,9 +47,9 @@ case class PropertyPredicateNormalizer(anonymousVariableNameGenerator: Anonymous
       p.copy(properties = None)(p.position)
     case NodePattern(Some(id), _, Some(_), _) =>
       throw new IllegalStateException(s"Node pattern $id with non-map properties.")
-    case p @ RelationshipPattern(Some(_), _, _, Some(_: MapExpression), _, _) =>
+    case p @ RelationshipPattern(Some(_), _, _, Some(_: MapExpression), _, _, _) =>
       p.copy(properties = None)(p.position)
-    case RelationshipPattern(Some(id), _, _, Some(_), _, _) =>
+    case RelationshipPattern(Some(id), _, _, Some(_), _, _, _) =>
       throw new IllegalStateException(s"Relationship pattern $id with non-map properties.")
   }
 

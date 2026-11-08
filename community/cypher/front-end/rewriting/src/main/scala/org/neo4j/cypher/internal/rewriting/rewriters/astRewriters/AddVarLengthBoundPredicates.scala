@@ -67,15 +67,15 @@ case object AddVarLengthBoundPredicates extends AddPathPredicates[RelationshipPa
       case PrefixedPatternPart(_: SelectiveSelector, _, _) =>
         acc => SkipChildren(acc)
 
-      case RelationshipChain(_, rel @ RelationshipPattern(_, _, Some(_), _, _, _), _) =>
+      case RelationshipChain(_, rel @ RelationshipPattern(_, _, Some(_), _, _, _, _), _) =>
         acc => TraverseChildren(acc :+ rel)
     }
 
   def createPredicatesFor(relationships: Seq[RelationshipPattern], pos: InputPosition): Seq[Expression] =
     relationships.flatMap {
-      case RelationshipPattern(Some(relName), _, Some(None), _, _, _) =>
+      case RelationshipPattern(Some(relName), _, Some(None), _, _, _, _) =>
         createSizePredicatesForVarLengthRelationship(relName.name, 1, None, pos)
-      case RelationshipPattern(Some(relName), _, Some(Some(Range(lowerLiteral, upperLiteral))), _, _, _) =>
+      case RelationshipPattern(Some(relName), _, Some(Some(Range(lowerLiteral, upperLiteral))), _, _, _, _) =>
         val lowerValue = lowerLiteral.map(_.value.longValue()).getOrElse(1L)
         val maybeUpperValue = upperLiteral.map(_.value.longValue())
         createSizePredicatesForVarLengthRelationship(relName.name, lowerValue, maybeUpperValue, pos)

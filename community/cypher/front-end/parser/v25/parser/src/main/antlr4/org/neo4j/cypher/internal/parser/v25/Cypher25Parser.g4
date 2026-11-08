@@ -482,7 +482,7 @@ properties
 relationshipPattern
    : leftArrow? arrowLine
      ( LBRACKET WHERE expression RBRACKET //prioritize the WHERE keyword
-     | LBRACKET variable? labelExpression? pathLength? properties? (WHERE expression)? RBRACKET
+     | LBRACKET variable? labelExpression? pathLength? properties? (STACK stackAction)? (WHERE expression)? RBRACKET
      )? arrowLine rightArrow?
    ;
 
@@ -2299,6 +2299,7 @@ unescapedSymbolicNameString_
    | AT
    | AUTH
    | AUTO
+   | BALANCED
    | BFLOAT16
    | BINDINGS
    | BOOL
@@ -2477,6 +2478,7 @@ unescapedSymbolicNameString_
    | PATHS
    | PLAINTEXT
    | POINT
+   | POP
    | POPULATED
    | PRIMARY
    | PRIMARIES
@@ -2489,6 +2491,7 @@ unescapedSymbolicNameString_
    | PROPERTY_EXISTS
    | PROVIDER
    | PROVIDERS
+   | PUSH
    | RANGE
    | READ
    | REALLOCATE
@@ -2539,6 +2542,7 @@ unescapedSymbolicNameString_
    | SIGNED
    | SINGLE
    | SKIPROWS
+   | STACK
    | START
    | STARTS
    | STATUS
@@ -2569,6 +2573,7 @@ unescapedSymbolicNameString_
    | TYPED
    | TYPES
    | UUID
+   | UNBALANCED
    | UNION
    | UNIQUE
    | UNIQUENESS
@@ -2599,4 +2604,8 @@ unescapedSymbolicNameString_
 
 endOfFile
    : EOF
+   ;
+
+stackAction
+   : SIGNED? (PUSH | POP) (BALANCED | UNBALANCED) (symbolicNameString COLON)? expression
    ;

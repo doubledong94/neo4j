@@ -37,6 +37,7 @@ import org.neo4j.cypher.internal.expressions.RelationshipChain
 import org.neo4j.cypher.internal.expressions.RelationshipPattern
 import org.neo4j.cypher.internal.expressions.SemanticDirection
 import org.neo4j.cypher.internal.expressions.ShortestPathsPatternPart
+import org.neo4j.cypher.internal.expressions.StackAction
 import org.neo4j.cypher.internal.expressions.StarQuantifier
 
 trait PatternStringifier {
@@ -153,11 +154,14 @@ private class DefaultPatternStringifier(expr: ExpressionStringifier) extends Pat
       case Some(Some(range)) => Some(stringifyRange(range))
     }
 
+    val stackAction = relationship.stackAction.map(stringifyStackAction)
+
     val body = concatenate(
       " ",
       Seq(
         concatenate("", Seq(variable, labelExpression, length)),
         relationship.properties.map(expr.apply),
+        stackAction,
         relationship.predicate.map(stringifyPredicate)
       )
     ).fold("")(inner => s"[$inner]")
@@ -193,6 +197,12 @@ private class DefaultPatternStringifier(expr: ExpressionStringifier) extends Pat
       Some(apply(path.part)),
       path.optionalWhereClause.map(stringifyPredicate)
     ).flatten.mkString("(", " ", ")")
+
+  private def stringifyStackAction(action: StackAction): String = {
+    val stackPart = action.stack.map(v => s"${expr.backtick(v.name, shouldBacktickEmpty = true)}: ").getOrElse("")
+    val keyPart = action.key.map(expr.apply).getOrElse("")
+    s"${action.stackClause} $stackPart$keyPart"
+  }
 
   private def concatenate(separator: String, fragments: Seq[Option[String]]): Option[String] =
     Some(fragments.flatten)

@@ -72,6 +72,7 @@ import org.neo4j.cypher.internal.expressions.SemanticDirection.BOTH
 import org.neo4j.cypher.internal.expressions.SemanticDirection.OUTGOING
 import org.neo4j.cypher.internal.expressions.SensitiveLiteral
 import org.neo4j.cypher.internal.expressions.SignedDecimalIntegerLiteral
+import org.neo4j.cypher.internal.expressions.StackAction
 import org.neo4j.cypher.internal.expressions.UnPositionedVariable.varFor
 import org.neo4j.cypher.internal.expressions.functions.Labels
 import org.neo4j.cypher.internal.expressions.functions.Point
@@ -2551,8 +2552,8 @@ case class LogicalPlan2PlanDescription(
       case _: ErrorPlan =>
         PlanDescriptionImpl(id, "Error", children, Seq.empty, variables, withRawCardinalities, withDistinctness)
 
-      case Expand(_, fromName, dir, typeNames, toName, relName, mode) =>
-        val expression = Details(expandExpressionDescription(
+      case Expand(_, fromName, dir, typeNames, toName, relName, mode, stackAction) =>
+        val expression = expandExpressionDescription(
           Some(fromName),
           relName,
           typeNames,
@@ -2561,13 +2562,16 @@ case class LogicalPlan2PlanDescription(
           1,
           Some(1),
           None
-        ))
+        )
+        // PlanDescriptionImpl allows at most one Details argument, so the stack action is part of
+        // the same Details as the expand expression.
+        val details = Seq(Details(expression +: stackActionDescription(stackAction).toSeq))
         val modeDescr = expandModeDescription(mode)
         PlanDescriptionImpl(
           id,
           s"Expand($modeDescr)",
           children,
-          Seq(expression),
+          details,
           variables,
           withRawCardinalities,
           withDistinctness
@@ -2782,7 +2786,7 @@ case class LogicalPlan2PlanDescription(
           _,
           ShortestRelationshipPattern(
             maybePathName,
-            PatternRelationship(relName, (fromName, toName), dir, relTypes, patternLength: PatternLength),
+            PatternRelationship(relName, (fromName, toName), dir, relTypes, patternLength: PatternLength, _),
             isSingle
           ),
           nodePredicates,
@@ -3611,6 +3615,13 @@ case class LogicalPlan2PlanDescription(
     }
   }
 
+  private def stackActionDescription(stackAction: Option[StackAction]): Option[PrettyString] =
+    stackAction.map { action =>
+      val stackPart = action.stack.map(s => s"${s.name}: ").getOrElse("")
+      val keyPart = action.key.map(k => asPrettyString(k).prettifiedString).getOrElse("")
+      PrettyString(s"${action.stackClause} $stackPart$keyPart")
+    }
+
   private def callInTxsDetails(
     batchSize: Expression,
     concurrency: TransactionConcurrency,
@@ -3966,7 +3977,7 @@ case class LogicalPlan2PlanDescription(
           withDistinctness
         )
 
-      case RepeatTrail(_, _, repetition, start, end, _, _, _, _, _, _, _, _, mode, allReduceMappings) =>
+      case RepeatTrail(_, _, repetition, start, end, _, _, _, _, _, _, _, _, mode, allReduceMappings, _) =>
         PlanDescriptionImpl(
           id = plan.id,
           s"Repeat(${expandModeDescription(mode)}, Trail)",
@@ -3977,7 +3988,7 @@ case class LogicalPlan2PlanDescription(
           withDistinctness
         )
 
-      case RepeatAcyclic(_, _, repetition, start, end, _, _, _, _, _, _, _, _, _, _, _, mode, allReduceMappings) =>
+      case RepeatAcyclic(_, _, repetition, start, end, _, _, _, _, _, _, _, _, _, _, _, mode, allReduceMappings, _) =>
         PlanDescriptionImpl(
           id = plan.id,
           s"Repeat(${expandModeDescription(mode)}, Acyclic)",
@@ -4010,7 +4021,7 @@ case class LogicalPlan2PlanDescription(
           withDistinctness
         )
 
-      case RepeatWalk(_, _, repetition, start, end, _, _, _, _, _, _, mode, allReduceMappings) =>
+      case RepeatWalk(_, _, repetition, start, end, _, _, _, _, _, _, mode, allReduceMappings, _) =>
         PlanDescriptionImpl(
           id = plan.id,
           s"Repeat(${expandModeDescription(mode)}, Walk)",

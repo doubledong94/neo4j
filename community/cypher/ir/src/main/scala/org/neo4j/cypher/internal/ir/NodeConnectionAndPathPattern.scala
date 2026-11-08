@@ -24,12 +24,14 @@ import org.neo4j.cypher.internal.expressions.LogicalVariable
 import org.neo4j.cypher.internal.expressions.RelTypeName
 import org.neo4j.cypher.internal.expressions.SemanticDirection
 import org.neo4j.cypher.internal.expressions.ShortestPathsPatternPart
+import org.neo4j.cypher.internal.expressions.StackAction
 import org.neo4j.cypher.internal.expressions.VariableGrouping
 import org.neo4j.cypher.internal.ir.ExhaustivePathPattern.NodeConnections
 import org.neo4j.cypher.internal.macros.AssertMacros3
 import org.neo4j.cypher.internal.util.NonEmptyList
 import org.neo4j.cypher.internal.util.Repetition
 import org.neo4j.cypher.internal.util.Rewritable
+import org.neo4j.cypher.internal.util.UpperBound
 import org.neo4j.util.Stringifier.backtick
 
 sealed trait PathVariable {
@@ -121,7 +123,8 @@ final case class PatternRelationship(
   boundaryNodes: (LogicalVariable, LogicalVariable),
   dir: SemanticDirection,
   types: Seq[RelTypeName],
-  length: PatternLength
+  length: PatternLength,
+  stackAction: Option[StackAction] = None
 ) extends ExhaustiveNodeConnection {
 
   def directionRelativeTo(node: LogicalVariable): SemanticDirection = if (node == left) dir else dir.reversed
@@ -232,11 +235,117 @@ final case class QuantifiedPathPattern(
       case qpp: QuantifiedPathPattern => qpp.allPatternRelationships
     }
 
+  /**
+   * All quantified path patterns contained in this pattern, recursively descending into nested ones.
+   */
+  def allQuantifiedPathPatterns: Set[QuantifiedPathPattern] =
+    patternRelationships.iterator.flatMap {
+      case qpp: QuantifiedPathPattern => Set(qpp) ++ qpp.allQuantifiedPathPatterns
+      case _: PatternRelationship     => Set.empty
+    }.toSet
+
+  /**
+   * The relationships traversed by one repetition of this pattern, with nested quantified path patterns
+   * expanded according to their lower repetition bound (but at least once). Used for cardinality estimation,
+   * where treating a nested repetition as a single relationship would underestimate the pattern considerably.
+   * The total expansion is capped at [[QuantifiedPathPattern.MaxNestedRepetitionExpansion]] relationships; a
+   * per-level cap would still grow multiplicatively for deeply nested patterns.
+   */
+  def relationshipsPerRepetition: Seq[PatternRelationship] =
+    relationshipsPerRepetitionWithin(QuantifiedPathPattern.MaxNestedRepetitionExpansion)
+
+  private def relationshipsPerRepetitionWithin(limit: Long): Seq[PatternRelationship] = {
+    val relationships = Vector.newBuilder[PatternRelationship]
+    var remaining = limit
+
+    def collect(qpp: QuantifiedPathPattern): Unit = {
+      val connections = qpp.patternRelationships.iterator
+      while (remaining > 0 && connections.hasNext) {
+        connections.next() match {
+          case pr: PatternRelationship =>
+            relationships += pr
+            remaining -= 1
+          case nested: QuantifiedPathPattern =>
+            val repetitions =
+              Math.max(1L, Math.min(nested.repetition.min, QuantifiedPathPattern.MaxNestedRepetitionExpansion))
+            var i = 0L
+            while (i < repetitions && remaining > 0) {
+              collect(nested)
+              i += 1
+            }
+        }
+      }
+    }
+
+    collect(this)
+    relationships.result()
+  }
+
+  /**
+   * Lower bound of the number of relationships traversed by one repetition of this pattern, taking nested
+   * quantified path patterns into account.
+   */
+  def minRelationshipsPerRepetition: Long =
+    patternRelationships.toIndexedSeq.foldLeft(0L) { (acc, connection) =>
+      val amount = connection match {
+        case pr: PatternRelationship => pr.length match {
+            case VarPatternLength(min, _) => min.toLong
+            case _                        => 1L
+          }
+        case nested: QuantifiedPathPattern =>
+          QuantifiedPathPattern.saturatingMultiply(nested.repetition.min, nested.minRelationshipsPerRepetition)
+      }
+      QuantifiedPathPattern.saturatingAdd(acc, amount)
+    }
+
+  /**
+   * Upper bound of the number of relationships traversed by one repetition of this pattern, taking nested
+   * quantified path patterns into account. `None` if the pattern can traverse an unbounded number of relationships.
+   */
+  def maxRelationshipsPerRepetition: Option[Long] =
+    patternRelationships.toIndexedSeq.foldLeft(Option(0L)) { (acc, connection) =>
+      val amount = connection match {
+        case pr: PatternRelationship => pr.length match {
+            case VarPatternLength(_, max) => max.map(_.toLong)
+            case _                        => Some(1L)
+          }
+        case nested: QuantifiedPathPattern =>
+          nested.repetition.max match {
+            case UpperBound.Unlimited =>
+              None
+            case UpperBound.Limited(limit) =>
+              nested.maxRelationshipsPerRepetition.map(QuantifiedPathPattern.saturatingMultiply(limit, _))
+          }
+      }
+      for {
+        accumulated <- acc
+        connectionAmount <- amount
+      } yield QuantifiedPathPattern.saturatingAdd(accumulated, connectionAmount)
+    }
+
   // all pattern nodes are part of a relationship because a QPP has always at least one relationship and is linear in shape
   val patternNodes: Set[LogicalVariable] = patternRelationships.iterator.flatMap {
     case pr: PatternRelationship => pr.boundaryNodesSet
     // A nested QPP contributes all of its own pattern nodes plus its boundary nodes, which connect it to the enclosing pattern
     case qpp: QuantifiedPathPattern => qpp.patternNodes ++ qpp.boundaryNodesSet
+  }.toSet
+
+  /**
+   * The node variables this pattern exposes to an enclosing pattern. For a plain relationship these are its boundary
+   * nodes; for a nested QPP these are its boundary nodes and the node group variables it exposes, since an enclosing
+   * pattern refers to the nested pattern through those group variables.
+   */
+  private val exposedNodeVariables: Set[LogicalVariable] = patternRelationships.iterator.flatMap {
+    case pr: PatternRelationship    => pr.boundaryNodesSet
+    case qpp: QuantifiedPathPattern => qpp.nodes
+  }.toSet
+
+  /**
+   * The relationship variables this pattern exposes to an enclosing pattern. See [[exposedNodeVariables]].
+   */
+  private val exposedRelationshipVariables: Set[LogicalVariable] = patternRelationships.iterator.flatMap {
+    case pr: PatternRelationship    => Set(pr.variable)
+    case qpp: QuantifiedPathPattern => qpp.relationships ++ qpp.allPatternRelationships.map(_.variable)
   }.toSet
 
   // all variables are meant as singletons except those in the groupings
@@ -251,13 +360,13 @@ final case class QuantifiedPathPattern(
   )
 
   AssertMacros3.checkOnlyWhenAssertionsAreEnabled(
-    nodeVariableGroupings.forall(grouping => patternNodes.contains(grouping.singleton)),
+    nodeVariableGroupings.forall(grouping => exposedNodeVariables.contains(grouping.singleton)),
     s"Not all singleton node variables ${nodeVariableGroupings.map(_.singleton)} were pattern nodes"
   )
 
   AssertMacros3.checkOnlyWhenAssertionsAreEnabled(
     relationshipVariableGroupings.forall(grouping =>
-      allPatternRelationships.map(_.variable).contains(grouping.singleton)
+      exposedRelationshipVariables.contains(grouping.singleton)
     ),
     s"Not all singleton relationship variables ${relationshipVariableGroupings.map(_.singleton)} were relationship names"
   )
@@ -292,12 +401,19 @@ final case class QuantifiedPathPattern(
           VariableGrouping.singletonToGroup(relationshipVariableGroupings, pr.variable)
             .map(RelationshipPathVariable.apply) ++:
           acc
-      case (qpp: QuantifiedPathPattern, acc) =>
-        // A nested QPP exposes the groupings of its innermost pattern; the enclosing QPP re-exposes them,
-        // so they need to be part of its path variables as well.
+      case (nested: QuantifiedPathPattern, acc) =>
+        // A nested QPP is represented in the enclosing pattern by its group variables. Map every variable it
+        // exposes to the variable of the enclosing pattern, preserving the order of the nested pattern. Its first
+        // and last path variables are the boundary nodes, which are plain nodes of the enclosing pattern and are
+        // emitted by the surrounding connections (or by the right tail above).
         val nestedGroupVariables: Seq[PathVariable] =
-          nodeVariableGroupings.iterator.map(grouping => NodePathVariable(grouping.group)).toSeq ++
-            relationshipVariableGroupings.iterator.map(grouping => RelationshipPathVariable(grouping.group)).toSeq
+          nested.pathVariables.drop(1).dropRight(1).flatMap {
+            case NodePathVariable(variable) =>
+              VariableGrouping.singletonToGroup(nodeVariableGroupings, variable).map(NodePathVariable.apply)
+            case RelationshipPathVariable(variable) =>
+              VariableGrouping.singletonToGroup(relationshipVariableGroupings, variable)
+                .map(RelationshipPathVariable.apply)
+          }
         nestedGroupVariables ++: acc
     }
   }
@@ -311,7 +427,55 @@ final case class QuantifiedPathPattern(
   override def solvedString: String =
     s"(${backtick(leftBinding.outer.name)})$solvedStringSuffix"
 
-  val dependencies: Set[LogicalVariable] = selections.predicates.flatMap(_.dependencies)
+  /**
+   * Variables referenced by the keys of the stack actions of this pattern. The keys are evaluated once
+   * per repetition on the inner row of the [[Repeat]], so variables from the enclosing scope have to be
+   * made available as arguments of the inner plan.
+   */
+  val stackKeyDependencies: Set[LogicalVariable] =
+    allPatternRelationships.iterator
+      .flatMap(_.stackAction.iterator)
+      .flatMap(_.key.iterator)
+      .flatMap(_.dependencies)
+      .toSet
+
+  /**
+   * Variables introduced by this pattern, i.e. the singletons bound by one repetition of it. Stack key
+   * dependencies that are in this set are bound by the inner plan and must therefore not be treated as
+   * outer variables.
+   */
+  def variablesIntroducedByPattern: Set[LogicalVariable] =
+    patternRelationships.iterator.flatMap {
+      case relationship: PatternRelationship => relationship.boundaryNodesSet + relationship.variable
+      case nested: QuantifiedPathPattern =>
+        nested.variablesIntroducedByPattern ++ nested.boundaryNodesSet ++ nested.relationships
+    }.toSet
+
+  /**
+   * The variables referenced by stack action keys that are not bound inside this pattern and therefore
+   * have to be imported as arguments of the inner plan.
+   */
+  lazy val externalStackKeyDependencies: Set[LogicalVariable] =
+    stackKeyDependencies -- variablesIntroducedByPattern
+
+  /**
+   * Variables referenced by the selections of this pattern and of all quantified path patterns nested in it
+   * that are not bound inside this pattern and therefore have to be imported as arguments of the inner plan.
+   *
+   * Predicates of a top-level quantified path pattern are lifted into the enclosing query graph by
+   * MoveQuantifiedPathPatternPredicates, so this is mainly relevant for nested quantified path patterns,
+   * whose selections are planned inside of the enclosing quantified path pattern instead. They are
+   * collected recursively because the inner plan of the enclosing pattern may rewrite a nested pattern
+   * into a different shape (e.g. a var-length expand) that still evaluates the nested selections.
+   */
+  lazy val externalSelectionDependencies: Set[LogicalVariable] =
+    (selections.predicates.iterator ++
+      allQuantifiedPathPatterns.iterator.flatMap(_.selections.predicates))
+      .flatMap(_.dependencies)
+      .toSet -- variablesIntroducedByPattern
+
+  val dependencies: Set[LogicalVariable] =
+    selections.predicates.flatMap(_.dependencies) ++ stackKeyDependencies
 
   /**
    * Creates a QueryGraph representation of the Quantified Path Pattern and collects all dependent selections eg.
@@ -330,6 +494,25 @@ final case class QuantifiedPathPattern(
     val maybeFoundVariableGrouping = nodeVariableGroupings.find(_.singleton == singletonVariable)
     maybeFoundVariableGrouping.map(_.group)
   }
+}
+
+object QuantifiedPathPattern {
+
+  /**
+   * Cap for how often the relationships of a nested quantified path pattern are repeated when flattening
+   * them for cardinality estimation. Mirrors the maximum var-length used by the cardinality model.
+   */
+  val MaxNestedRepetitionExpansion: Long = 32L
+
+  private[ir] def saturatingAdd(a: Long, b: Long): Long = {
+    val sum = a + b
+    if (sum < a) Long.MaxValue else sum
+  }
+
+  private[ir] def saturatingMultiply(a: Long, b: Long): Long =
+    if (a == 0 || b == 0) 0L
+    else if (a > Long.MaxValue / b) Long.MaxValue
+    else a * b
 }
 
 sealed trait PathPattern {
@@ -404,11 +587,11 @@ object ExhaustivePathPattern {
       s"NodeConnections.connections seem to be out-of order: $connections"
     )
 
-    override def allQuantifiedPathPatterns: Set[QuantifiedPathPattern] = {
-      connections.toSet[ExhaustiveNodeConnection].collect {
-        case qpp: QuantifiedPathPattern => qpp
+    override def allQuantifiedPathPatterns: Set[QuantifiedPathPattern] =
+      connections.toSet[ExhaustiveNodeConnection].flatMap {
+        case qpp: QuantifiedPathPattern => Set(qpp) ++ qpp.allQuantifiedPathPatterns
+        case _: PatternRelationship     => Set.empty
       }
-    }
 
     override def allNodeConnections: Set[NodeConnection] =
       connections.toSet
@@ -473,8 +656,15 @@ final case class SelectivePathPattern(
         case innerQpp: QuantifiedPathPattern =>
           val innerQppAsQueryGraph = innerQpp.asQueryGraph
 
+          // The nested quantified path patterns of `innerQpp` are recorded on its query graph rather
+          // than flattened into its pattern relationships. Copy them over, so that the query graph of
+          // the selective path pattern also covers everything read inside of them.
+          val withNestedQpps = innerQppAsQueryGraph.quantifiedPathPatterns
+            .foldLeft(acc)((graph, nestedQpp) => graph.addQuantifiedPathPattern(nestedQpp))
+
           // We do not need to take the outer nodes into consideration here
-          acc.addPatternRelationships(innerQppAsQueryGraph.patternRelationships)
+          withNestedQpps
+            .addPatternRelationships(innerQppAsQueryGraph.patternRelationships)
             // since they are added in the pattern relationship part of the selective path pattern or are considered for analysis in the outer QueryGraph
             .addPatternNodes(innerQppAsQueryGraph.patternNodes.diff(boundaryNodesSet).toList: _*)
             .addSelections(innerQppAsQueryGraph.selections)
@@ -483,7 +673,7 @@ final case class SelectivePathPattern(
     }.addSelections(selections)
 
   lazy val varLengthRelationships: Seq[LogicalVariable] = pathPattern.connections.toIndexedSeq.collect {
-    case PatternRelationship(name, _, _, _, _: VarPatternLength) => name
+    case PatternRelationship(name, _, _, _, _: VarPatternLength, _) => name
   }
 }
 

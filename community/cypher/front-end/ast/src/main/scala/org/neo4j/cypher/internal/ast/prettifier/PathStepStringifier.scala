@@ -18,10 +18,12 @@ package org.neo4j.cypher.internal.ast.prettifier
 
 import org.neo4j.cypher.internal.expressions.LogicalVariable
 import org.neo4j.cypher.internal.expressions.MultiRelationshipPathStep
+import org.neo4j.cypher.internal.expressions.NestedRepeatPathGroup
 import org.neo4j.cypher.internal.expressions.NilPathStep
 import org.neo4j.cypher.internal.expressions.NodePathStep
 import org.neo4j.cypher.internal.expressions.NodeRelPair
 import org.neo4j.cypher.internal.expressions.PathStep
+import org.neo4j.cypher.internal.expressions.RepeatPathGroup
 import org.neo4j.cypher.internal.expressions.RepeatPathStep
 import org.neo4j.cypher.internal.expressions.SemanticDirection
 import org.neo4j.cypher.internal.expressions.SingleRelationshipPathStep
@@ -68,15 +70,19 @@ private class DefaultPathStepStringifier(expr: ExpressionStringifier) extends Pa
     s"$lArrow-[$stringifiedRel$multiRel]-$rArrow($stringifiedToNode)" + this(next)
   }
 
-  private def repeatPathStep(variables: Seq[NodeRelPair], toNode: LogicalVariable, next: PathStep): String = {
-    val variableString =
-      variables.flatMap(_.variables).map(expr.apply(_, shouldBacktickEmpty = true)).zipWithIndex.map {
-        case (name, index) if (index % 2 == 0) =>
-          s"($name)"
-        case (name, _) =>
-          s"-[$name]-"
-      }.mkString("")
+  private def repeatPathStep(variables: Seq[RepeatPathGroup], toNode: LogicalVariable, next: PathStep): String = {
+    val variableString = variables.map(repeatPathGroup).mkString("")
 
     s" ($variableString())* (${expr(toNode, shouldBacktickEmpty = true)})${apply(next)}"
   }
+
+  private def repeatPathGroup(group: RepeatPathGroup): String =
+    group match {
+      case NodeRelPair(node, relationship) =>
+        s"(${expr(node, shouldBacktickEmpty = true)})-[${
+            expr(relationship, shouldBacktickEmpty = true)
+          }]-"
+      case NestedRepeatPathGroup(groups) =>
+        s"(${groups.map(repeatPathGroup).mkString})"
+    }
 }

@@ -457,6 +457,15 @@ class LogicalPlanToPlanBuilderStringTest
       .build()
   )
 
+  testPlan(
+    "expandAll with stack action",
+    new TestPlanBuilder()
+      .produceResults("y")
+      .expandAll("(x)-[r:R]->(y)", stackAction = Some("PUSH BALANCED call: r.site"))
+      .nodeByLabelScan("x", "START", IndexOrderNone)
+      .build()
+  )
+
   // Var expand
   testPlan(
     "expand",
@@ -3439,6 +3448,37 @@ class LogicalPlanToPlanBuilderStringTest
         accumulators = Set(("1", "b", "c"))
       ))
       .|.expandAll("(a_inner)-[r_inner]->(b_inner)")
+      .|.argument("me", "a_inner")
+      .nodeByLabelScan("me", "START", IndexOrderNone)
+      .build()
+  )
+
+  testPlan(
+    "repeatTrail with stack actions",
+    new TestPlanBuilder()
+      .produceResults("me", "you", "a", "b", "r")
+      .repeatTrail(TrailParameters(
+        min = 0,
+        max = Limited(2),
+        start = "me",
+        end = "you",
+        innerStart = "a",
+        innerEnd = "b",
+        groupNodes = Set(("a_inner", "a"), ("b_inner", "b")),
+        groupRelationships = Set(("r_inner", "r")),
+        innerRelationships = Set("r_inner"),
+        previouslyBoundRelationships = Set.empty,
+        previouslyBoundRelationshipGroups = Set("r_group"),
+        reverseGroupVariableProjections = true,
+        expansionMode = ExpandAll,
+        accumulators = Set.empty,
+        stackActions = Seq(
+          "PUSH BALANCED call: b_inner.site",
+          "SIGNED POP BALANCED call: r_inner.site",
+          "PUSH UNBALANCED"
+        )
+      ))
+      .|.expandAll("(a_inner)-[r_inner]->(b_inner)", stackAction = Some("SIGNED POP BALANCED call: r_inner.site"))
       .|.argument("me", "a_inner")
       .nodeByLabelScan("me", "START", IndexOrderNone)
       .build()

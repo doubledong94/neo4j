@@ -42,28 +42,53 @@ import scala.collection.immutable.ArraySeq
 
 object NFA {
 
-  case class PathLength(min: Int, maybeMax: Option[Int]) {
-    def addMin(addition: Int): PathLength = PathLength(min + addition, maybeMax)
+  case class PathLength(min: Long, maybeMax: Option[Long]) {
 
-    def addMax(maybeAddition: Option[Int]): PathLength =
-      PathLength(min, maybeAddition.flatMap(addition => maybeMax.map(_ + addition)))
+    def addMin(addition: Long): PathLength =
+      PathLength(PathLength.saturatingAdd(min, addition), maybeMax)
+
+    def addMax(maybeAddition: Option[Long]): PathLength =
+      PathLength(
+        min,
+        maybeAddition.flatMap(addition => maybeMax.map(max => PathLength.saturatingAdd(max, addition)))
+      )
   }
 
   object PathLength {
-    val none: PathLength = PathLength(0, None)
+    val none: PathLength = PathLength(0L, None)
+
+    /**
+     * Bounds of a (possibly deeply nested) quantified path pattern are multiplied, so they can easily
+     * exceed the range of an `Int` (or even a `Long`). Saturating keeps the bound meaningful.
+     */
+    private def saturatingAdd(a: Long, b: Long): Long = {
+      val sum = a + b
+      if (sum < a) Long.MaxValue else sum
+    }
+
+    private def saturatingMultiply(a: Long, b: Long): Long =
+      if (a == 0L || b == 0L) 0L
+      else if (a > Long.MaxValue / b) Long.MaxValue
+      else a * b
 
     def from(nodeConnections: NodeConnections[ExhaustiveNodeConnection]): PathLength =
       nodeConnections.connections.foldLeft(PathLength(0, Some(0)): PathLength) {
         case (pathLength, nodeConnection) => nodeConnection match {
-            case PatternRelationship(_, _, _, _, length) =>
+            case PatternRelationship(_, _, _, _, length, _) =>
               length match {
-                case SimplePatternLength        => pathLength.addMin(1).addMax(Some(1))
-                case VarPatternLength(min, max) => pathLength.addMin(min).addMax(max)
+                case SimplePatternLength        => pathLength.addMin(1L).addMax(Some(1L))
+                case VarPatternLength(min, max) => pathLength.addMin(min.toLong).addMax(max.map(_.toLong))
               }
             case qpp: QuantifiedPathPattern =>
               val PathLength(innerMin, innerMax) = from(NodeConnections(qpp.patternRelationships))
-              val min = qpp.repetition.min.toInt * innerMin
-              val max = qpp.repetition.max.limit.map(outerMax => innerMax.map(_ * outerMax.toInt)).flatten
+              val min = saturatingMultiply(qpp.repetition.min, innerMin)
+              val max = qpp.repetition.max.limit match {
+                // Zero repetitions contribute no relationships regardless of the inner bound (which may
+                // itself be unbounded).
+                case Some(0)        => Some(0L)
+                case Some(outerMax) => innerMax.map(saturatingMultiply(_, outerMax))
+                case None           => None
+              }
               pathLength.addMin(min).addMax(max)
           }
 

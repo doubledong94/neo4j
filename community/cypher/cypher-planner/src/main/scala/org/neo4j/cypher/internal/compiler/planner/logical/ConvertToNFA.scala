@@ -59,6 +59,26 @@ import org.neo4j.exceptions.InternalException
 object ConvertToNFA {
 
   /**
+   * Stack constraints are not supported together with the NFA/PPBFS search used for shortest/any path
+   * selection, since that engine merges search states per node and cannot be made context-sensitive cheaply.
+   */
+  private def rejectStackConstraints(spp: SelectivePathPattern): Unit = {
+    def check(connection: ExhaustiveNodeConnection): Unit = connection match {
+      case relationship: PatternRelationship if relationship.stackAction.isDefined =>
+        throw new UnsupportedOperationException(
+          "Stack constraints are not supported together with shortest/any path selection"
+        )
+      case quantified: QuantifiedPathPattern
+        if quantified.allPatternRelationships.exists(_.stackAction.isDefined) =>
+        throw new UnsupportedOperationException(
+          "Stack constraints are not supported together with shortest/any path selection"
+        )
+      case _ =>
+    }
+    spp.pathPattern.connections.foreach(check)
+  }
+
+  /**
    * @return (
    *           the NFA representing the selective path pattern,
    *           the selections from the spp that could not be inlined,
@@ -72,6 +92,7 @@ object ConvertToNFA {
     predicatesOnTargetNode: Seq[Expression],
     anonymousVariableNameGenerator: AnonymousVariableNameGenerator
   ): (NFA, Selections, Map[LogicalVariable, LogicalVariable]) = {
+    rejectStackConstraints(spp)
     val firstNode = if (fromLeft) spp.left else spp.right
 
     val builder = new NFABuilder(firstNode)
@@ -304,11 +325,11 @@ object ConvertToNFA {
         }
 
         val newlyInlinedSelections = nodeConnection match {
-          case PatternRelationship(relationship, (left, right), dir, types, SimplePatternLength) =>
+          case PatternRelationship(relationship, (left, right), dir, types, SimplePatternLength, _) =>
             val target = if (fromLeft) right else left
             addRelationship(relationship, target, dir, types)
 
-          case PatternRelationship(relationship, (left, right), dir, types, VarPatternLength(lowerBound, max)) =>
+          case PatternRelationship(relationship, (left, right), dir, types, VarPatternLength(lowerBound, max), _) =>
             /*
              * We introduce anonymous nodes for the nodes that we traverse while evaluating a var-length relationship.
              * Furthermore, we try to use a similar logic to that from QPPs also for var-length relationships.

@@ -40,7 +40,7 @@ object RewriteShortestPathWithFixedLengthRel extends Rewriter {
 
   private val instance = topDown(Rewriter.lift {
     case s @ ShortestPathsPatternPart(
-        r @ RelationshipChain(_: NodePattern, relPat @ RelationshipPattern(_, _, None, _, _, _), _),
+        r @ RelationshipChain(_: NodePattern, relPat @ RelationshipPattern(_, _, None, _, _, _, _), _),
         _
       ) =>
       val one = Some(PathLengthQuantifier("1")(InputPosition.NONE))

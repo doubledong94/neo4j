@@ -153,7 +153,7 @@ case object AddElementUniquenessPredicates extends AddPathPredicates[NodeConnect
       case Acyclic() =>
         val hasVarLengthRel =
           part.element.folder.treeExists {
-            case RelationshipPattern(_, _, Some(_), _, _, _) => true
+            case RelationshipPattern(_, _, Some(_), _, _, _, _) => true
           }
         if (hasVarLengthRel) {
           throw new IllegalArgumentException(
@@ -391,14 +391,14 @@ case object AddElementUniquenessPredicates extends AddPathPredicates[NodeConnect
       case _: ShortestPathsPatternPart =>
         acc => SkipChildren(acc)
 
-      case RelationshipChain(_, RelationshipPattern(optIdent, labelExpression, None, _, _, _), _) =>
+      case RelationshipChain(_, RelationshipPattern(optIdent, labelExpression, None, _, _, _, _), _) =>
         acc => {
           val ident =
             optIdent.getOrElse(throw new IllegalStateException("This rewriter cannot work with unnamed patterns"))
           TraverseChildren(acc :+ SingleRelationship(ident, labelExpression))
         }
 
-      case RelationshipChain(_, RelationshipPattern(optIdent, labelExpression, Some(range), _, _, _), _) =>
+      case RelationshipChain(_, RelationshipPattern(optIdent, labelExpression, Some(range), _, _, _, _), _) =>
         acc => {
           val ident =
             optIdent.getOrElse(throw new IllegalStateException("This rewriter cannot work with unnamed patterns"))

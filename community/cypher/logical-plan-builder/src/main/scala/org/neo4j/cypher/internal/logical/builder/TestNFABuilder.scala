@@ -100,7 +100,8 @@ class TestNFABuilder(startStateId: Int, startStateName: String) extends NFABuild
             None,
             None,
             relPredicate,
-            direction
+            direction,
+            _
           ),
           NodePredicate(toName, toNodePredicateFromRel)
         ) =>

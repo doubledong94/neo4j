@@ -260,7 +260,7 @@ object expandSolverStep {
     val expansionMode = if (overlapping) ExpandInto else ExpandAll
 
     patternRelationship match {
-      case pr @ PatternRelationship(_, _, _, _, SimplePatternLength) =>
+      case pr @ PatternRelationship(_, _, _, _, SimplePatternLength, _) =>
         context.staticComponents.logicalPlanProducer.planSimpleExpand(
           sourcePlan,
           node,
@@ -270,7 +270,7 @@ object expandSolverStep {
           context,
           qg.hints
         )
-      case PatternRelationship(_, _, _, _, varLength: VarPatternLength) =>
+      case PatternRelationship(_, _, _, _, varLength: VarPatternLength, _) =>
         val availablePredicates: collection.Seq[Expression] =
           qg.selections.predicatesGiven(availableSymbols + pattern + otherSide)
         val (
@@ -333,6 +333,16 @@ object expandSolverStep {
     queryGraph: QueryGraph
   ): Option[LogicalPlanWithIntoVsAllHeuristic] = {
     val fromLeft = startNode == quantifiedPathPattern.left
+
+    // Stack keys and selections of nested quantified path patterns are evaluated once per repetition on the
+    // inner row of the Repeat, so every variable they reference has to be bound by the source plan and imported
+    // into the inner plan. If that is not the case for this solve direction, this expansion is not viable; the
+    // solver may still find a plan by binding the missing variables first or by solving from the other side.
+    val requiredInnerArguments =
+      quantifiedPathPattern.externalStackKeyDependencies ++ quantifiedPathPattern.externalSelectionDependencies
+    if (!requiredInnerArguments.subsetOf(availableVars)) {
+      return None
+    }
 
     val qppInnerStartNodeGroupVariable = {
       if (quantifiedPathPattern.leftBinding.outer == startNode)

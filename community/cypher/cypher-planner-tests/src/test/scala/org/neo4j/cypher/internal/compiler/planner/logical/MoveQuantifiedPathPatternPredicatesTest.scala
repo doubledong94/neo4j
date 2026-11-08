@@ -148,6 +148,22 @@ class MoveQuantifiedPathPatternPredicatesTest extends CypherPlannerTestSuite wit
     q.queryGraph.selectivePathPatterns.flatMap(_.selections.flatPredicates) should contain(pred)
   }
 
+  test("should move a predicate of a parenthesized path inside a QPP within a Selective Path Pattern") {
+    // UnwrapParenthesizedPath does not unwrap parenthesized paths inside selective path patterns, so the
+    // predicate must be turned into a QPP selection during IR conversion instead of being dropped.
+    val q = buildSinglePlannerQueryAndRewrite(
+      "MATCH ANY SHORTEST (start) (((a)-[r]->(b) WHERE b.prop > 123)){2} (end) RETURN 1 AS one"
+    )
+
+    val pred = ForAllRepetitions(
+      v"b",
+      Set(variableGrouping("a", "a"), variableGrouping("b", "b"), variableGrouping("r", "r")),
+      andedPropertyInequalities(greaterThan(prop("b", "prop"), literal(123)))
+    )(pos)
+
+    q.queryGraph.selectivePathPatterns.flatMap(_.selections.flatPredicates) should contain(pred)
+  }
+
   test("should keep the order of the node connections in the selective path pattern") {
     val query =
       """MATCH ANY SHORTEST (start)

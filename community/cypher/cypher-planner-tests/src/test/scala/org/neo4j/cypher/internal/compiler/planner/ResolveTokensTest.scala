@@ -170,7 +170,8 @@ class ResolveTokensTest extends CypherPlannerTestSuite with AstConstructionTestS
                   None,
                   None,
                   None,
-                  SemanticDirection.OUTGOING
+                  SemanticDirection.OUTGOING,
+                  _
                 ),
                 NodePattern(None, None, None, None)
               )
@@ -205,7 +206,8 @@ class ResolveTokensTest extends CypherPlannerTestSuite with AstConstructionTestS
                   None,
                   None,
                   None,
-                  SemanticDirection.OUTGOING
+                  SemanticDirection.OUTGOING,
+                  _
                 ),
                 NodePattern(None, None, None, None)
               )

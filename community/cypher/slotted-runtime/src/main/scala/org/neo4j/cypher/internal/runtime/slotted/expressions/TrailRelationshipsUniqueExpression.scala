@@ -22,7 +22,7 @@ package org.neo4j.cypher.internal.runtime.slotted.expressions
 import org.neo4j.collection.trackable.HeapTrackingLongHashSet
 import org.neo4j.cypher.internal.physicalplanning.Slot
 import org.neo4j.cypher.internal.physicalplanning.SlotConfigurationUtils.makeGetPrimitiveRelationshipFromSlotFunctionFor
-import org.neo4j.cypher.internal.runtime.CastSupport.castOrFail
+import org.neo4j.cypher.internal.runtime.NestedGroupValues
 import org.neo4j.cypher.internal.runtime.ReadableRow
 import org.neo4j.cypher.internal.runtime.RuntimeMetadataValue
 import org.neo4j.cypher.internal.runtime.interpreted.commands.AstNode
@@ -32,8 +32,6 @@ import org.neo4j.util.CalledFromGeneratedCode
 import org.neo4j.values.AnyValue
 import org.neo4j.values.storable.BooleanValue
 import org.neo4j.values.storable.Values.booleanValue
-import org.neo4j.values.virtual.ListValue
-import org.neo4j.values.virtual.VirtualRelationshipValue
 
 case class TrailRelationshipsUniqueExpression(trailStateMetadataSlotOffset: Int, innerRelationship: Slot)
     extends Expression
@@ -54,15 +52,14 @@ case class TrailRelationshipsUniqueExpression(trailStateMetadataSlotOffset: Int,
     } else {
       // A nested quantified path pattern is exposed through its group variable, which holds a list of the
       // relationships bound by one repetition of the inner pattern. Every relationship of that list must be
-      // unique with respect to the relationships seen so far.
-      val relationships = castOrFail[ListValue](row.getRefAt(innerRelationship.offset)).iterator()
-      var unique = true
-      while (unique && relationships.hasNext) {
-        unique = !relationshipsSeen.contains(castOrFail[VirtualRelationshipValue](relationships.next()).id())
-      }
-      unique
+      // unique with respect to the relationships seen so far. Since quantified path patterns may be nested
+      // arbitrarily deep, the value may in turn be a list of lists.
+      allRelationshipsSeenUnique(row.getRefAt(innerRelationship.offset), relationshipsSeen)
     }
   }
+
+  private def allRelationshipsSeenUnique(value: AnyValue, relationshipsSeen: HeapTrackingLongHashSet): Boolean =
+    NestedGroupValues.foreachRelationshipId(value)(rel => !relationshipsSeen.contains(rel))
 }
 
 trait TrailState {

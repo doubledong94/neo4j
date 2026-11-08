@@ -16,6 +16,7 @@
  */
 package org.neo4j.cypher.internal.frontend
 
+import org.neo4j.cypher.internal.CypherVersion
 import org.neo4j.cypher.internal.ast.AstConstructionTestSupport.p
 import org.neo4j.cypher.internal.ast.AstConstructionTestSupport.varFor
 import org.neo4j.cypher.internal.frontend.label_expressions.UpdateStatement
@@ -348,6 +349,44 @@ class QuantifiedPathPatternsSemanticAnalysisTest extends NameBasedSemanticAnalys
 
   test("MATCH ((a)-->(b)-[r]->*(c))+ RETURN count(*)") {
     run().hasNoErrors
+  }
+
+  test("MATCH ACYCLIC (x) (((a)-[b]->(c))*)+ RETURN count(*)") {
+    runWith(defaultQuery, disabledCypherVersions = Set(CypherVersion.Cypher5)).hasError(
+      ErrorGqlStatusObjectImplementation.from(GqlStatusInfoCodes.STATUS_42001)
+        .atPosition(19, 1, 20)
+        .withCause(ErrorGqlStatusObjectImplementation.from(GqlStatusInfoCodes.STATUS_42I12)
+          .atPosition(19, 1, 20)
+          .build())
+        .build(),
+      "Quantified path patterns are not allowed to be nested in an ACYCLIC path pattern.",
+      InputPosition(19, 1, 20)
+    )
+  }
+
+  test("MATCH ACYCLIC (x) (((a)-[b]->(c)){2}){2} (y) RETURN count(*)") {
+    runWith(defaultQuery, disabledCypherVersions = Set(CypherVersion.Cypher5)).hasError(
+      ErrorGqlStatusObjectImplementation.from(GqlStatusInfoCodes.STATUS_42001)
+        .atPosition(19, 1, 20)
+        .withCause(ErrorGqlStatusObjectImplementation.from(GqlStatusInfoCodes.STATUS_42I12)
+          .atPosition(19, 1, 20)
+          .build())
+        .build(),
+      "Quantified path patterns are not allowed to be nested in an ACYCLIC path pattern.",
+      InputPosition(19, 1, 20)
+    )
+  }
+
+  test("MATCH ACYCLIC (x) ((a)-[b]->(c))+ (y) RETURN count(*)") {
+    runWith(defaultQuery, disabledCypherVersions = Set(CypherVersion.Cypher5)).hasNoErrors
+  }
+
+  test(
+    "MATCH ACYCLIC (a) ((x)-[r:R WHERE EXISTS { MATCH (p) ((u)-[w]->(v))+ (q) }]->(y))+ (b) RETURN b"
+  ) {
+    // A quantified path pattern inside a subquery has its own scope, so it is not nested in the enclosing
+    // quantified path pattern and does not conflict with the ACYCLIC path mode of the outer pattern.
+    runWith(defaultQuery, disabledCypherVersions = Set(CypherVersion.Cypher5)).hasNoErrors
   }
 
   test("MATCH ((a)-[*]->(b))+ RETURN count(*)") {

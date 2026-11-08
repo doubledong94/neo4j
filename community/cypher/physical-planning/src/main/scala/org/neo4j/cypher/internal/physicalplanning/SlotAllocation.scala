@@ -922,11 +922,11 @@ class SingleQuerySlotAllocator private[physicalplanning] (
         }
         recordArgument(lp)
 
-      case Expand(_, _, _, _, to, relName, ExpandAll) =>
+      case Expand(_, _, _, _, to, relName, ExpandAll, _) =>
         relName.foreach(r => slots.newLong(r, nullable, CTRelationship))
         to.foreach(t => slots.newLong(t, nullable, CTNode))
 
-      case Expand(_, _, _, _, _, relName, ExpandInto) =>
+      case Expand(_, _, _, _, _, relName, ExpandInto, _) =>
         relName.foreach(r => slots.newLong(r, nullable, CTRelationship))
 
       case SimulatedExpand(_, _, rel, to, _) =>

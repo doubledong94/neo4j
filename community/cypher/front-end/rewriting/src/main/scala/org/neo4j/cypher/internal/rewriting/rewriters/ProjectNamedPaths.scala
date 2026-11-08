@@ -34,22 +34,27 @@ import org.neo4j.cypher.internal.expressions.Expression
 import org.neo4j.cypher.internal.expressions.LogicalVariable
 import org.neo4j.cypher.internal.expressions.MultiRelationshipPathStep
 import org.neo4j.cypher.internal.expressions.NamedPatternPart
+import org.neo4j.cypher.internal.expressions.NestedRepeatPathGroup
 import org.neo4j.cypher.internal.expressions.NilPathStep
 import org.neo4j.cypher.internal.expressions.NodePathStep
 import org.neo4j.cypher.internal.expressions.NodePattern
+import org.neo4j.cypher.internal.expressions.NodeRelPair
 import org.neo4j.cypher.internal.expressions.ParenthesizedPath
 import org.neo4j.cypher.internal.expressions.PathConcatenation
 import org.neo4j.cypher.internal.expressions.PathExpression
+import org.neo4j.cypher.internal.expressions.PathFactor
 import org.neo4j.cypher.internal.expressions.PathPatternPart
 import org.neo4j.cypher.internal.expressions.PathStep
 import org.neo4j.cypher.internal.expressions.PatternElement
 import org.neo4j.cypher.internal.expressions.QuantifiedPath
 import org.neo4j.cypher.internal.expressions.RelationshipChain
 import org.neo4j.cypher.internal.expressions.RelationshipPattern
+import org.neo4j.cypher.internal.expressions.RepeatPathGroup
 import org.neo4j.cypher.internal.expressions.RepeatPathStep
 import org.neo4j.cypher.internal.expressions.ShortestPathsPatternPart
 import org.neo4j.cypher.internal.expressions.SingleRelationshipPathStep
 import org.neo4j.cypher.internal.expressions.Variable
+import org.neo4j.cypher.internal.expressions.VariableGrouping
 import org.neo4j.cypher.internal.rewriting.conditions.ContainsNamedPathOnlyForShortestPath
 import org.neo4j.cypher.internal.rewriting.conditions.ContainsNoExpandableClauses
 import org.neo4j.cypher.internal.rewriting.conditions.NoUnnamedNodesAndRelationships
@@ -334,7 +339,7 @@ case object ProjectNamedPaths extends Rewriter with StepSequencer.Step {
       case np @ NodePattern(node, _, _, _) =>
         NodePathStep(node.get.copyId, step)(np.position)
 
-      case rc @ RelationshipChain(leftSide, RelationshipPattern(rel, _, length, _, _, direction), to) =>
+      case rc @ RelationshipChain(leftSide, RelationshipPattern(rel, _, length, _, _, direction, _), to) =>
         length match {
           case None =>
             flip(
@@ -356,7 +361,11 @@ case object ProjectNamedPaths extends Rewriter with StepSequencer.Step {
           case (
               NodePathStep(node, innerStep),
               qpp @ QuantifiedPath(
-                PathPatternPart(RelationshipChain(_: NodePattern, RelationshipPattern(rel, _, _, _, _, direction), _)),
+                PathPatternPart(RelationshipChain(
+                  _: NodePattern,
+                  RelationshipPattern(rel, _, _, _, _, direction, _),
+                  _
+                )),
                 _,
                 _,
                 _
@@ -369,10 +378,8 @@ case object ProjectNamedPaths extends Rewriter with StepSequencer.Step {
           // Remove the first NodePathStep after a QPP (list is traversed in reverse).
           // This is needed because it will be included as the toNode of the RepeatPathStep, instead.
           case (NodePathStep(node, innerStep), qpp @ QuantifiedPath(PathPatternPart(element), _, _, _)) =>
-            val qppSingletonVars = collectRelationshipVarsInQpp(element)
-            val groupVars =
-              qppSingletonVars.map(singletonVar => qpp.variableGroupings.find(_.singleton == singletonVar).get.group)
-            RepeatPathStep.asRepeatPathStep(groupVars, node, innerStep)(qpp.position)
+            val groups = collectGroupsInQpp(element).map(mapGroupVariables(_, qpp.variableGroupings))
+            RepeatPathStep(groups, node, innerStep)(qpp.position)
           case (prevStep, factor) => flip(factor, prevStep)
         }
 
@@ -384,15 +391,62 @@ case object ProjectNamedPaths extends Rewriter with StepSequencer.Step {
     }
   }
 
-  private def collectRelationshipVarsInQpp(element: PatternElement): Seq[LogicalVariable] =
+  private def collectGroupsInQpp(element: PatternElement): Seq[RepeatPathGroup] =
     element match {
-      case rc @ RelationshipChain(_, RelationshipPattern(_, _, _, _, _, _), _) =>
+      case rc @ RelationshipChain(_, RelationshipPattern(_, _, _, _, _, _, _), _) =>
         // Leave out last variable because it will be the same as the toNode
-        rc.allSingletonVariablesLeftToRight.init
+        nodeRelPairs(rc.allSingletonVariablesLeftToRight.init)
+
+      // A quantified path pattern may contain a concatenation of simpler parts, e.g. when it contains
+      // fewer, or nested, quantified path patterns. QuantifiedPathPatternNodeInsertRewriter pads those
+      // with filler nodes, so the parts are still laid out in path order.
+      case PathConcatenation(factors) =>
+        factors.flatMap(collectFactorGroups)
+
+      case ParenthesizedPath(part, _) =>
+        collectGroupsInQpp(part.element)
+
+      case _: NodePattern =>
+        // Filler nodes do not contribute any variables to the path.
+        Seq.empty
 
       case _ =>
         throw new IllegalArgumentException("Only relationships allowed in QPPs.")
     }
+
+  private def nodeRelPairs(variables: Seq[LogicalVariable]): Seq[RepeatPathGroup] =
+    variables.grouped(2).toSeq.flatMap {
+      case Seq(node, relationship) => Some(NodeRelPair(node, relationship))
+      case _                       => None
+    }
+
+  /**
+   * A nested quantified path pattern is represented in the enclosing pattern by its group variables, at one
+   * nesting level below the relationships the enclosing pattern contains directly.
+   */
+  private def collectFactorGroups(factor: PathFactor): Seq[RepeatPathGroup] =
+    factor match {
+      case quantified: QuantifiedPath =>
+        val groups = collectGroupsInQpp(quantified.part.element).map(mapGroupVariables(_, quantified.variableGroupings))
+        Seq(NestedRepeatPathGroup(groups))
+
+      case other =>
+        collectGroupsInQpp(other)
+    }
+
+  private def mapGroupVariables(
+    group: RepeatPathGroup,
+    groupings: Set[VariableGrouping]
+  ): RepeatPathGroup =
+    group match {
+      case NodeRelPair(node, relationship) =>
+        NodeRelPair(mapVariable(node, groupings), mapVariable(relationship, groupings))
+      case NestedRepeatPathGroup(groups) =>
+        NestedRepeatPathGroup(groups.map(mapGroupVariables(_, groupings)))
+    }
+
+  private def mapVariable(variable: LogicalVariable, groupings: Set[VariableGrouping]): LogicalVariable =
+    groupings.find(_.singleton == variable).map(_.group).getOrElse(variable)
 
   override def preConditions: Set[StepSequencer.Condition] = Set(
     // This rewriter needs to know the expanded return items

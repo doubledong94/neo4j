@@ -687,7 +687,8 @@ case class RelationshipPattern(
   length: Option[Option[Range]],
   properties: Option[Expression],
   predicate: Option[Expression],
-  direction: SemanticDirection
+  direction: SemanticDirection,
+  stackAction: Option[StackAction] = None
 )(val position: InputPosition) extends ASTNode with PatternAtom with HasMappableExpressions[RelationshipPattern] {
 
   def isSingleLength: Boolean = length.isEmpty
@@ -701,7 +702,7 @@ case class RelationshipPattern(
   }
 
   def dependencies: Set[LogicalVariable] =
-    (predicate.toSet ++ properties).flatMap(_.dependencies)
+    (predicate.toSet ++ properties ++ stackAction.flatMap(_.key)).flatMap(_.dependencies)
 
   override def mapExpressions(f: Expression => Expression): RelationshipPattern = {
     // The parser only allows parameters and Map literals in the properties position of a pattern.
@@ -718,7 +719,8 @@ case class RelationshipPattern(
       length = length.map(_.map(_.mapExpressions(f))),
       labelExpression = labelExpression.map(_.mapExpressions(f)),
       properties = mappedProperties,
-      predicate = predicate.map(f)
+      predicate = predicate.map(f),
+      stackAction = stackAction.map(_.mapExpressions(f))
     )(this.position)
   }
 }

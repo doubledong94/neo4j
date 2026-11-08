@@ -64,6 +64,17 @@ import scala.collection.mutable
  *   builder.build()
  *  }}}
  */
+object NFABuilder {
+
+  /**
+   * The maximum number of states an NFA may contain. A quantified path pattern is unrolled for its lower (and,
+   * when bounded, upper) repetition bound, and the bounds of nested quantified path patterns multiply. Without a
+   * limit a query like `ANY SHORTEST (a) (((...){1000000}){2}) (b)` would exhaust the heap while building the
+   * NFA. Failing fast keeps planning bounded.
+   */
+  val MaxStates: Int = 1 << 20
+}
+
 class NFABuilder protected (val startState: State) {
 
   private val states: mutable.SortedMap[Int, State] = mutable.SortedMap(startState.id -> startState)
@@ -127,6 +138,12 @@ class NFABuilder protected (val startState: State) {
   def getStartState: State = startState
 
   def addAndGetState(variable: LogicalVariable, predicate: Option[VariablePredicate]): State = {
+    if (nextId >= NFABuilder.MaxStates) {
+      throw new UnsupportedOperationException(
+        s"The shortest/any path selection pattern is too large to plan: it would require an NFA with more than " +
+          s"${NFABuilder.MaxStates} states. Reduce the lower or upper bound of the quantified path patterns."
+      )
+    }
     val newState = State(this.nextId, variable, predicate)
     this.states += (newState.id -> newState)
     this.nextId = nextId + 1

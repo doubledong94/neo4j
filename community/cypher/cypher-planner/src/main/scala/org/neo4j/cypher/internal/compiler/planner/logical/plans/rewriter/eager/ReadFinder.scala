@@ -60,6 +60,7 @@ import org.neo4j.cypher.internal.expressions.RELATIONSHIP_TYPE
 import org.neo4j.cypher.internal.expressions.RelTypeName
 import org.neo4j.cypher.internal.expressions.RelationshipTypeToken
 import org.neo4j.cypher.internal.expressions.ScopeExpression
+import org.neo4j.cypher.internal.expressions.StackAction
 import org.neo4j.cypher.internal.expressions.Variable
 import org.neo4j.cypher.internal.expressions.functions.Keys
 import org.neo4j.cypher.internal.expressions.functions.Labels
@@ -863,8 +864,12 @@ object ReadFinder {
       case Selection(predicate, _) =>
         processFilterExpression(PlanReads(), predicate, semanticTable)
 
-      case Expand(_, _, _, relTypes, to, relName, mode) =>
-        processExpand(relTypes, nodeVariable(to), relationshipVariable(relName), mode)
+      case Expand(_, _, _, relTypes, to, relName, mode, stackAction) =>
+        processStackActions(
+          processExpand(relTypes, nodeVariable(to), relationshipVariable(relName), mode),
+          stackAction,
+          semanticTable
+        )
 
       case OptionalExpand(_, _, _, relTypes, to, relName, mode, _) =>
         processExpand(relTypes, nodeVariable(to), relationshipVariable(relName), mode)
@@ -905,7 +910,7 @@ object ReadFinder {
 
       case FindShortestPaths(
           _,
-          ShortestRelationshipPattern(_, PatternRelationship(relationship, _, _, types, _), _),
+          ShortestRelationshipPattern(_, PatternRelationship(relationship, _, _, types, _, _), _),
           _,
           _,
           _,
@@ -1081,7 +1086,11 @@ object ReadFinder {
         PlanReads().withCallInTx
 
       case r: Repeat =>
-        PlanReads().withIntroducedNodeVariable(r.end)
+        processStackActions(
+          PlanReads().withIntroducedNodeVariable(r.end),
+          r.stackActions,
+          semanticTable
+        )
 
       case BidirectionalRepeatTrail(_, _, _, _, _, _, _, _, _, _, _, _, _) |
         RepeatOptions(_, _) =>
@@ -1432,6 +1441,19 @@ object ReadFinder {
       case None => varRead
     }
   }
+
+  /**
+   * The keys of stack actions are evaluated once per repetition and may read node or relationship
+   * properties, so they contribute reads to the plan that carries the actions.
+   */
+  private def processStackActions(
+    acc: PlanReads,
+    stackActions: Iterable[StackAction],
+    semanticTable: SemanticTable
+  ): PlanReads =
+    stackActions.foldLeft(acc) { (acc, action) =>
+      action.key.fold(acc)(processFilterExpression(acc, _, semanticTable))
+    }
 
   private def processFilterExpression(acc: PlanReads, expression: Expression, semanticTable: SemanticTable): PlanReads =
     expression match {

@@ -40,6 +40,7 @@ import org.neo4j.cypher.internal.expressions.CountStar
 import org.neo4j.cypher.internal.expressions.Expression
 import org.neo4j.cypher.internal.expressions.MatchMode
 import org.neo4j.cypher.internal.expressions.MultiRelationshipPathStep
+import org.neo4j.cypher.internal.expressions.NestedRepeatPathGroup
 import org.neo4j.cypher.internal.expressions.NilPathStep
 import org.neo4j.cypher.internal.expressions.NodePathStep
 import org.neo4j.cypher.internal.expressions.NodePattern
@@ -2278,6 +2279,19 @@ class ProjectNamedPathsTest extends CypherFunSuite with AstRewritingTestSupport 
     )(pos)
 
     returns should equal(expected)
+  }
+
+  test("MATCH p = (((x)-[r]->(y)){2})+ (end) RETURN p AS p") {
+    val returns = parseReturnedQppExpr(testName)
+
+    returns match {
+      // The nested quantified path pattern is represented by the group variables of the enclosing one,
+      // so the path repeats over them once rather than trying to describe the nested relationships.
+      case PathExpression(NodePathStep(_, RepeatPathStep(variables, _, _))) =>
+        variables should equal(Seq(NestedRepeatPathGroup(Seq(NodeRelPair(v"x", v"r")))))
+      case other =>
+        fail(s"Unexpected path expression: $other")
+    }
   }
 
   test("MATCH p = (a)-[r]->(b) RETURN p, 42 as order ORDER BY order") {

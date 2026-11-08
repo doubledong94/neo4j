@@ -157,7 +157,7 @@ case object triadicSelectionFinder extends SelectionCandidateGenerator {
     qg: QueryGraph,
     context: LogicalPlanningContext
   ): Seq[LogicalPlan] = expandWithSelections.expand match {
-    case Expand(exp1: Expand, _, _, _, _, _, ExpandAll) =>
+    case Expand(exp1: Expand, _, _, _, _, _, ExpandAll, _) =>
       findMatchingInnerExpand(
         positivePredicate,
         triadicPredicate,
@@ -168,7 +168,7 @@ case object triadicSelectionFinder extends SelectionCandidateGenerator {
         context
       )
 
-    case Expand(Selection(Ands(innerPredicates), exp1: Expand), _, _, _, _, _, ExpandAll) =>
+    case Expand(Selection(Ands(innerPredicates), exp1: Expand), _, _, _, _, _, ExpandAll, _) =>
       findMatchingInnerExpand(
         positivePredicate,
         triadicPredicate,
@@ -192,7 +192,8 @@ case object triadicSelectionFinder extends SelectionCandidateGenerator {
         _,
         _,
         _,
-        ExpandAll
+        ExpandAll,
+        _
       ) =>
       findMatchingInnerExpand(
         positivePredicate,
@@ -284,9 +285,9 @@ case object triadicSelectionFinder extends SelectionCandidateGenerator {
     val from = exp.from
     val to = exp.to
     qg.patternRelationships.find {
-      case PatternRelationship(_, (`from`, `to`), _, _, _) => true
-      case PatternRelationship(_, (`to`, `from`), _, _, _) => true
-      case _                                               => false
+      case PatternRelationship(_, (`from`, `to`), _, _, _, _) => true
+      case PatternRelationship(_, (`to`, `from`), _, _, _, _) => true
+      case _                                                  => false
     }.get
   }
 
@@ -362,7 +363,8 @@ case object triadicSelectionFinder extends SelectionCandidateGenerator {
               (predicateFrom, predicateTo),
               predicateDir,
               predicateTypes,
-              SimplePatternLength
+              SimplePatternLength,
+              _
             )),
             SetExtractor(),
             patternNodes,

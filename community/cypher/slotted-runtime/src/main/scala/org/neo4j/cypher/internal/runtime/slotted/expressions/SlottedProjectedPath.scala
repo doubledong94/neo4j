@@ -261,23 +261,30 @@ object SlottedProjectedPath {
     override def arguments: Seq[Expression] = Seq(rel) ++ tailProjector.arguments
   }
 
-  case class quantifiedPathProjector(groupVariables: Seq[Expression], toNode: Expression, tailProjector: Projector)
+  /**
+   * One level of group variables of a quantified path pattern in a projected path. A nested quantified path
+   * pattern is represented at the level below, which is why this is a tree: a path may mix relationships contained
+   * directly in a quantified path pattern with nested ones, and the two have a different nesting depth.
+   */
+  sealed trait RepeatGroupProjection {
+    def arguments: Seq[Expression]
+  }
+
+  case class RepeatEntityProjection(node: Expression, relationship: Expression) extends RepeatGroupProjection {
+    override def arguments: Seq[Expression] = Seq(node, relationship)
+  }
+
+  case class NestedRepeatProjection(groups: Seq[RepeatGroupProjection]) extends RepeatGroupProjection {
+    override def arguments: Seq[Expression] = groups.flatMap(_.arguments)
+  }
+
+  case class quantifiedPathProjector(groups: Seq[RepeatGroupProjection], toNode: Expression, tailProjector: Projector)
       extends Projector {
 
     override def apply(ctx: ReadableRow, state: QueryState, builder: PathValueBuilder): PathValueBuilder = {
 
-      /**
-       * Given a pattern: (from)( (a)-[r1]-(b)-[r2]-(c) ){2,2}(to)
-       *
-       * We could have:
-       * variables = [ [from/a_1, a_2] [r1_1,r1_2] , [b_1, b_2] , [r2_1,r2_2] ]
-       * toNode = to
-       *
-       * And therefore:
-       * path = [from/a_1 , r1_1, b_1, r2_1, a_2, r1_2, b_2, r2_2, to]
-       */
-      val values = groupVariables.map(
-        _.apply(ctx, state) match {
+      def topLevelValue(expression: Expression): ListValue =
+        expression.apply(ctx, state) match {
           case value: ListValue   => value
           case x if x eq NO_VALUE => VirtualValues.EMPTY_LIST
           case value: Value =>
@@ -293,32 +300,87 @@ object SlottedProjectedPath {
               CypherTypeValueMapper.valueType(other)
             )
         }
-      )
-      val patternSize = values.size
-      val repetitions = values.head.actualSize()
-      if (patternSize * repetitions > 0) {
-        var repetitionOffset = 0
-        while (repetitionOffset < repetitions) {
-          // Skip first node, was added by previous Projector
-          var patternOffset = if (repetitionOffset == 0) 1 else 0
-          while (patternOffset < patternSize) {
-            if (patternOffset % 2 == 0) {
-              // Node
-              builder.addNode(values(patternOffset).value(repetitionOffset))
-            } else {
-              // Relationship
-              builder.addRelationship(values(patternOffset).value(repetitionOffset))
-            }
-            patternOffset += 1
+
+      val values = scala.collection.mutable.Map.empty[Expression, ListValue]
+
+      def valueAt(expression: Expression, path: Seq[Int]): AnyValue = {
+        val root = values.getOrElseUpdate(expression, topLevelValue(expression))
+        var value: AnyValue = root
+        var level = 0
+        while (level < path.length) {
+          value = value match {
+            case list: ListValue   => list.value(path(level))
+            case x if x eq NO_VALUE => VirtualValues.EMPTY_LIST
+            case other =>
+              throw CypherTypeException.expectedListValue(
+                if (other == null) "NULL" else other.getTypeName,
+                String.valueOf(other),
+                CypherTypeValueMapper.valueType(other)
+              )
           }
-          repetitionOffset += 1
+          level += 1
         }
+        value
+      }
+
+      def sizeAt(expression: Expression, path: Seq[Int]): Long =
+        valueAt(expression, path) match {
+          case list: ListValue => list.actualSize()
+          case _               => 0L
+        }
+
+      def repetitionCount(group: RepeatGroupProjection, path: Seq[Int]): Long =
+        group match {
+          case RepeatEntityProjection(node, _) => sizeAt(node, path)
+          case NestedRepeatProjection(groups)  => groups.headOption.map(repetitionCount(_, path)).getOrElse(0L)
+        }
+
+      var skippedFirstNode = false
+      var addedAnything = false
+
+      /**
+       * Emits the entities of one repetition level of a quantified path pattern. Every group variable of that
+       * level holds one entry per repetition of that level, so all of them are indexed with the same offsets.
+       * A nested quantified path pattern is expanded at the position where it occurs in the path.
+       */
+      def addRepetitions(groups: Seq[RepeatGroupProjection], path: Seq[Int]): Unit = {
+        val repetitions = groups.headOption.map(repetitionCount(_, path)).getOrElse(0L)
+        var repetition = 0L
+        while (repetition < repetitions) {
+          addGroups(groups, path :+ repetition.toInt)
+          repetition += 1
+        }
+      }
+
+      def addGroups(groups: Seq[RepeatGroupProjection], path: Seq[Int]): Unit = {
+        var i = 0
+        while (i < groups.size) {
+          groups(i) match {
+            case RepeatEntityProjection(node, relationship) =>
+              // The very first node was already added by the previous projector.
+              if (skippedFirstNode) {
+                builder.addNode(valueAt(node, path))
+                addedAnything = true
+              } else {
+                skippedFirstNode = true
+              }
+              builder.addRelationship(valueAt(relationship, path))
+              addedAnything = true
+            case nested: NestedRepeatProjection =>
+              addRepetitions(nested.groups, path)
+          }
+          i += 1
+        }
+      }
+
+      addRepetitions(groups, Seq.empty)
+      if (addedAnything) {
         builder.addNode(toNode.apply(ctx, state))
       }
       tailProjector(ctx, state, builder)
     }
 
-    override def arguments: Seq[Expression] = groupVariables ++ Seq(toNode) ++ tailProjector.arguments
+    override def arguments: Seq[Expression] = groups.flatMap(_.arguments) ++ Seq(toNode) ++ tailProjector.arguments
   }
 
   private def addIncoming(relValue: AnyValue, state: QueryState, builder: PathValueBuilder) = relValue match {

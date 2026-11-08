@@ -46,7 +46,7 @@ case object relationshipTypeScanLeafPlanner extends LeafPlanner {
 
     queryGraph.patternRelationships.flatMap {
 
-      case relationship @ PatternRelationship(rel, (_, _), _, Seq(typ), SimplePatternLength)
+      case relationship @ PatternRelationship(rel, (_, _), _, Seq(typ), SimplePatternLength, _)
         if !shouldIgnore(relationship) =>
         context.staticComponents.planContext.relationshipTokenIndex.map { relationshipTokenIndex =>
           planHiddenSelectionAndRelationshipLeafPlan(

@@ -540,7 +540,7 @@ case class ClauseConverters(statementConverters: StatementConverters) extends La
       // CREATE ()->[:R]->()-[:R]->...->()
       case RelationshipChain(
           left,
-          RelationshipPattern(Some(relVar), Some(relTypeExpression), _, properties, _, direction),
+          RelationshipPattern(Some(relVar), Some(relTypeExpression), _, properties, _, direction, _),
           rightNode @ NodePattern(Some(rightVar), _, _, _)
         ) =>
         val relType = relTypeExpression match {

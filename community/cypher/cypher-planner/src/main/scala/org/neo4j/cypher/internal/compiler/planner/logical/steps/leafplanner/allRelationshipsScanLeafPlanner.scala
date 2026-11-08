@@ -46,7 +46,7 @@ case object allRelationshipsScanLeafPlanner extends LeafPlanner {
 
     queryGraph.patternRelationships.flatMap {
 
-      case relationship @ PatternRelationship(rel, (_, _), _, types, SimplePatternLength)
+      case relationship @ PatternRelationship(rel, (_, _), _, types, SimplePatternLength, _)
         if !shouldIgnore(relationship) &&
           types.isEmpty &&
           dynamicTypeScans.isEmpty =>

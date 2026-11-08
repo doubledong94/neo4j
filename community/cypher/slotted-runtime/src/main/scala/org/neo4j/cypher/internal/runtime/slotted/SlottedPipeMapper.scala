@@ -239,6 +239,7 @@ import org.neo4j.cypher.internal.runtime.interpreted.pipes.SetPipe
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.SetPropertiesOperation
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.SetPropertyFromMapOperation
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.SetPropertyOperation
+import org.neo4j.cypher.internal.runtime.interpreted.pipes.StackActionRuntime
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.Top1Pipe
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.Top1WithTiesPipe
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.TopNPipe
@@ -389,6 +390,16 @@ class SlottedPipeMapper(
     cancellationChecker: CancellationChecker,
     isNestedPlan: Boolean
   ): Unit = {}
+
+  /**
+   * Compile the stack actions of the stack-annotated expands inside a quantified path pattern,
+   * in pattern order. The key expressions are compiled against the inner plan's slot configuration,
+   * since they are evaluated on the inner result row.
+   */
+  private def compiledStackActions(repeat: plans.Repeat): Array[StackActionRuntime] = {
+    val inner = repeat.rhs.get
+    StackActionRuntime.compile(repeat, expressionConverters.toCommandExpression(inner.id, _))
+  }
 
   override def onLeaf(plan: LogicalPlan): Pipe = {
 
@@ -1440,13 +1451,14 @@ class SlottedPipeMapper(
         val runtimeColumns = createProjectionsForResult(columnExpressions, slots)
         ProduceResultsPipe(source, runtimeColumns.toArray)(id)
 
-      case Expand(_, from, dir, types, to, relName, ExpandAll) =>
+      // Stack actions are applied by the enclosing RepeatSlottedPipe, not by the Expand itself.
+      case Expand(_, from, dir, types, to, relName, ExpandAll, _) =>
         val fromSlot = slots(from).slot
         val relOffset = relName.map(slots.longOffset)
         val toOffset = to.map(slots.longOffset)
         ExpandAllSlottedPipe(source, fromSlot, relOffset, toOffset, dir, RelationshipTypes(types.toArray), slots)(id)
 
-      case Expand(_, from, dir, types, Some(to), relName, ExpandInto) =>
+      case Expand(_, from, dir, types, Some(to), relName, ExpandInto, _) =>
         val fromSlot = slots(from).slot
         val relOffset = relName.map(slots.longOffset)
         val toSlot = slots(to).slot
@@ -2374,7 +2386,8 @@ class SlottedPipeMapper(
           previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections,
           expansionMode,
-          accumulators
+          accumulators,
+          _
         ) =>
         val nodeInScope = expansionMode match {
           case ExpandAll  => false
@@ -2413,10 +2426,11 @@ class SlottedPipeMapper(
               rhsSlots(acc.previous).slot,
               rhsSlots(acc.next).slot
             )
-          ).toArray
+          ).toArray,
+          stackActions = compiledStackActions(repeat)
         )(id = id)
 
-      case RepeatTrail(
+      case repeat @ RepeatTrail(
           _,
           _,
           repetition,
@@ -2431,7 +2445,8 @@ class SlottedPipeMapper(
           previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections,
           expansionMode,
-          accumulators
+          accumulators,
+          _
         ) =>
         val nodeInScope = expansionMode match {
           case ExpandAll  => false
@@ -2466,10 +2481,11 @@ class SlottedPipeMapper(
               rhsSlots(acc.previous).slot,
               rhsSlots(acc.next).slot
             )
-          ).toArray
+          ).toArray,
+          stackActions = compiledStackActions(repeat)
         )(id = id)
 
-      case RepeatWalk(
+      case repeat @ RepeatWalk(
           _,
           _,
           repetition,
@@ -2482,7 +2498,8 @@ class SlottedPipeMapper(
           reverseGroupVariableProjections,
           _,
           expansionMode,
-          accumulators
+          accumulators,
+          _
         ) =>
         val nodeInScope = expansionMode match {
           case ExpandAll  => false
@@ -2511,7 +2528,8 @@ class SlottedPipeMapper(
               rhsSlots(acc.previous).slot,
               rhsSlots(acc.next).slot
             )
-          ).toArray
+          ).toArray,
+          stackActions = compiledStackActions(repeat)
         )(id = id)
 
       case _ =>

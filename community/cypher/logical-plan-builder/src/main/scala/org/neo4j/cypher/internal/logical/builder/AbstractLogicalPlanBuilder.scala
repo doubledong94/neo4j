@@ -57,8 +57,10 @@ import org.neo4j.cypher.internal.expressions.NODE_TYPE
 import org.neo4j.cypher.internal.expressions.NodePattern
 import org.neo4j.cypher.internal.expressions.Parameter
 import org.neo4j.cypher.internal.expressions.PathLengthQuantifier
+import org.neo4j.cypher.internal.expressions.PopFromStack
 import org.neo4j.cypher.internal.expressions.PropertyKeyName
 import org.neo4j.cypher.internal.expressions.PropertyKeyToken
+import org.neo4j.cypher.internal.expressions.PushOntoStack
 import org.neo4j.cypher.internal.expressions.RELATIONSHIP_TYPE
 import org.neo4j.cypher.internal.expressions.Range
 import org.neo4j.cypher.internal.expressions.RelTypeExpression
@@ -70,6 +72,8 @@ import org.neo4j.cypher.internal.expressions.SemanticDirection
 import org.neo4j.cypher.internal.expressions.SemanticDirection.OUTGOING
 import org.neo4j.cypher.internal.expressions.ShortestPathsPatternPart
 import org.neo4j.cypher.internal.expressions.SignedDecimalIntegerLiteral
+import org.neo4j.cypher.internal.expressions.StackAction
+import org.neo4j.cypher.internal.expressions.StackVariable
 import org.neo4j.cypher.internal.expressions.StringLiteral
 import org.neo4j.cypher.internal.expressions.True
 import org.neo4j.cypher.internal.expressions.UnPositionedVariable.varFor
@@ -572,7 +576,8 @@ abstract class AbstractLogicalPlanBuilder[T, IMPL <: AbstractLogicalPlanBuilder[
     projectedDir: SemanticDirection = OUTGOING,
     nodePredicates: Seq[Predicate] = Seq.empty,
     relationshipPredicates: Seq[Predicate] = Seq.empty,
-    pathMode: TraversalPathMode = TraversalPathMode.Trail
+    pathMode: TraversalPathMode = TraversalPathMode.Trail,
+    stackAction: Option[String] = None
   ): IMPL = {
     expandExpr(
       pattern,
@@ -580,7 +585,8 @@ abstract class AbstractLogicalPlanBuilder[T, IMPL <: AbstractLogicalPlanBuilder[
       projectedDir,
       nodePredicates.map(_.asVariablePredicate),
       relationshipPredicates.map(_.asVariablePredicate),
-      pathMode
+      pathMode,
+      stackAction
     )
   }
 
@@ -590,7 +596,8 @@ abstract class AbstractLogicalPlanBuilder[T, IMPL <: AbstractLogicalPlanBuilder[
     projectedDir: SemanticDirection = OUTGOING,
     nodePredicates: Seq[VariablePredicate] = Seq.empty,
     relationshipPredicates: Seq[VariablePredicate] = Seq.empty,
-    pathMode: TraversalPathMode = TraversalPathMode.Trail
+    pathMode: TraversalPathMode = TraversalPathMode.Trail,
+    stackAction: Option[String] = None
   ): IMPL = {
     val p = patternParser.parse(pattern)
     newRelationship(varFor(p.maybeRelName))
@@ -600,10 +607,26 @@ abstract class AbstractLogicalPlanBuilder[T, IMPL <: AbstractLogicalPlanBuilder[
 
     p.length match {
       case SimplePatternLength =>
+        val parsedStackAction = stackAction.map(parseStackAction)
         appendAtCurrentIndent(UnaryOperator(lp =>
-          Expand(lp, varFor(p.from), p.dir, p.relTypes, varFor(p.maybeTo), varFor(p.maybeRelName), expandMode)(_)
+          Expand(
+            lp,
+            varFor(p.from),
+            p.dir,
+            p.relTypes,
+            varFor(p.maybeTo),
+            varFor(p.maybeRelName),
+            expandMode,
+            parsedStackAction
+          )(_)
         ))
       case varPatternLength: VarPatternLength =>
+        if (stackAction.isDefined) {
+          throw new IllegalArgumentException(
+            "Stack constraints are only supported on single-relationship expands inside quantified path patterns. " +
+              s"Cannot build a variable-length expand `$pattern` with a stack action."
+          )
+        }
         appendAtCurrentIndent(UnaryOperator(lp =>
           VarExpand(
             lp,
@@ -957,8 +980,6 @@ abstract class AbstractLogicalPlanBuilder[T, IMPL <: AbstractLogicalPlanBuilder[
       )(_)
     ))
   }
-
-  def expandInto(pattern: String): IMPL = expand(pattern, ExpandInto)
 
   def optionalExpandAll(pattern: String, predicate: Option[String] = None): IMPL =
     optionalExpandAll(
@@ -3130,7 +3151,11 @@ abstract class AbstractLogicalPlanBuilder[T, IMPL <: AbstractLogicalPlanBuilder[
   def orderedUnionColumns(sortedOn: Seq[ColumnOrder]): IMPL =
     appendAtCurrentIndent(BinaryOperator((lhs, rhs) => OrderedUnion(lhs, rhs, sortedOn)(_)))
 
-  def expandAll(pattern: String): IMPL = expand(pattern, ExpandAll)
+  def expandAll(pattern: String, stackAction: Option[String] = None): IMPL =
+    expand(pattern, ExpandAll, stackAction = stackAction)
+
+  def expandInto(pattern: String, stackAction: Option[String] = None): IMPL =
+    expand(pattern, ExpandInto, stackAction = stackAction)
 
   def nonFuseable(): IMPL =
     appendAtCurrentIndent(UnaryOperator(lp => NonFuseable(lp)(_)))
@@ -3800,7 +3825,8 @@ abstract class AbstractLogicalPlanBuilder[T, IMPL <: AbstractLogicalPlanBuilder[
         trailParameters.expansionMode,
         trailParameters.accumulators.map { case (initial, previous, current) =>
           AllReduceAccumulator(toExpression(initial), varFor(previous), varFor(current))(pos)
-        }
+        },
+        trailParameters.stackActions.map(parseStackAction)
       )(_)
     ))
   }
@@ -3865,7 +3891,8 @@ abstract class AbstractLogicalPlanBuilder[T, IMPL <: AbstractLogicalPlanBuilder[
         walkParameters.expansionMode,
         walkParameters.accumulators.map { case (initial, previous, current) =>
           AllReduceAccumulator(parser.parseExpression(initial), varFor(previous), varFor(current))(pos)
-        }
+        },
+        walkParameters.stackActions.map(parseStackAction)
       )(_)
     ))
   }
@@ -3903,7 +3930,8 @@ abstract class AbstractLogicalPlanBuilder[T, IMPL <: AbstractLogicalPlanBuilder[
         expansionMode = acyclicParameters.expansionMode,
         accumulatorMappings = acyclicParameters.accumulators.map { case (initial, previous, current) =>
           AllReduceAccumulator(parser.parseExpression(initial), varFor(previous), varFor(current))(pos)
-        }
+        },
+        acyclicParameters.stackActions.map(parseStackAction)
       )(_)
     ))
   }
@@ -4024,6 +4052,49 @@ abstract class AbstractLogicalPlanBuilder[T, IMPL <: AbstractLogicalPlanBuilder[
   // HELPERS
   private def parseExpression(expression: String): Expression = {
     parser.parseExpression(expression).endoRewrite(expressionRewriter)
+  }
+
+  /**
+   * Parses a stack action written without the `STACK` keyword, in syntax order, e.g.
+   * `PUSH BALANCED call: r.site` or `SIGNED POP UNBALANCED r.site`.
+   */
+  private def parseStackAction(text: String): StackAction = {
+    val signed = text.startsWith("SIGNED ")
+    val withoutSigned = if (signed) text.substring("SIGNED ".length) else text
+
+    val (keyword, afterKeyword) = withoutSigned.split(" ", 2) match {
+      case Array(k, rest) => (k, rest)
+      case _              => throw new IllegalArgumentException(s"Cannot parse stack action '$text'")
+    }
+    val (balance, afterBalance) = afterKeyword.split(" ", 2) match {
+      // The balance qualifier may be the last token, e.g. for a keyless action without a stack name.
+      case Array(b)       => (b, "")
+      case Array(b, rest) => (b, rest)
+      case _              => throw new IllegalArgumentException(s"Cannot parse stack action '$text'")
+    }
+    val requiresBalance = balance match {
+      case "BALANCED"   => true
+      case "UNBALANCED" => false
+      case other        => throw new IllegalArgumentException(s"Unknown stack balance '$other' in stack action '$text'")
+    }
+
+    val (stackName, keyText) = {
+      val colon = afterBalance.indexOf(": ")
+      val possibleName = if (colon > 0) afterBalance.substring(0, colon) else ""
+      val isPlainName = possibleName.matches("[a-zA-Z_][a-zA-Z0-9_]*")
+      val isBacktickedName = possibleName.length >= 2 && possibleName.startsWith("`") && possibleName.endsWith("`")
+      if (colon > 0 && (isPlainName || isBacktickedName)) {
+        val name = if (isBacktickedName) possibleName.substring(1, possibleName.length - 1) else possibleName
+        (Some(StackVariable(name)(pos)), afterBalance.substring(colon + 2))
+      } else (None, afterBalance)
+    }
+    val key = Option(keyText).map(_.trim).filter(_.nonEmpty).map(parseExpression)
+
+    keyword match {
+      case "PUSH" => PushOntoStack(stackName, key, requiresBalance, signed)(pos)
+      case "POP"  => PopFromStack(stackName, key, requiresBalance, signed)(pos)
+      case other => throw new IllegalArgumentException(s"Unknown stack action keyword '$other' in stack action '$text'")
+    }
   }
 
   /**
@@ -4159,7 +4230,8 @@ object AbstractLogicalPlanBuilder {
     previouslyBoundRelationshipGroups: Set[String],
     reverseGroupVariableProjections: Boolean,
     expansionMode: ExpansionMode,
-    accumulators: Set[(ToExpression, String, String)]
+    accumulators: Set[(ToExpression, String, String)],
+    stackActions: Seq[String] = Seq.empty
   )
 
   object TrailParameters {
@@ -4180,7 +4252,8 @@ object AbstractLogicalPlanBuilder {
     reverseGroupVariableProjections: Boolean,
     innerRelationships: Set[String],
     expansionMode: ExpansionMode,
-    accumulators: Set[(String, String, String)]
+    accumulators: Set[(String, String, String)],
+    stackActions: Seq[String] = Seq.empty
   )
 
   case class AcyclicParameters(
@@ -4200,7 +4273,8 @@ object AbstractLogicalPlanBuilder {
     previouslyBoundRelationshipGroups: Set[String], // // in the current GRAPH pattern
     reverseGroupVariableProjections: Boolean,
     expansionMode: ExpansionMode,
-    accumulators: Set[(String, String, String)]
+    accumulators: Set[(String, String, String)],
+    stackActions: Seq[String] = Seq.empty
   )
 
   def createPattern(

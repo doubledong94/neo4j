@@ -123,7 +123,7 @@ class SelectHasLabelWithJoinTest extends CypherPlannerTestSuite with LogicalPlan
     plan._1 should beLike {
       case Apply(
           NodeByLabelScan(LogicalVariable("n"), _, _, _),
-          Optional(Expand(NodeByLabelScan(LogicalVariable("m"), _, args, _), _, _, _, _, _, _), _)
+          Optional(Expand(NodeByLabelScan(LogicalVariable("m"), _, args, _), _, _, _, _, _, _, _), _)
         ) if args == Set(v"n") => ()
     }
   }

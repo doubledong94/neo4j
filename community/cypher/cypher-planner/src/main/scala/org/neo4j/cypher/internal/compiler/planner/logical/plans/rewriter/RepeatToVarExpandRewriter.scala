@@ -130,8 +130,10 @@ case class RepeatToVarExpandRewriter(
       anonymousVariableNameGenerator = anonymousVariableNameGenerator
     ).collect {
       case inlinedPredicates
-        // the rewrite is possible, check if there are any heuristics saying that we shouldn't do it
-        if !heuristics.exists(_.shouldPreferRepeatOverVarExpand(repeat, inlinedPredicates, rootPlan)) =>
+        // the rewrite is possible, check if there are any heuristics saying that we shouldn't do it.
+        // A stack constraint must stay on the Repeat, since VarExpand does not support stack constraints.
+        if repeat.stackActions.isEmpty &&
+          !heuristics.exists(_.shouldPreferRepeatOverVarExpand(repeat, inlinedPredicates, rootPlan)) =>
         val varExpand = createVarExpand(repeat, expand, quantifier, inlinedPredicates, varExpandRel, expansionMode)
         val expandWithUniqueRel = maybeAddRelUniquenessPredicates(repeat, varExpandRel, varExpand)
         val expandWithUniqueGroupRel = maybeAddGroupRelUniquenessPredicates(repeat, varExpandRel, expandWithUniqueRel)
@@ -539,7 +541,8 @@ object RepeatToVarExpandRewriter {
             _,
             _,
             expansionMode,
-            AllReduceAccumulators.Empty()
+            AllReduceAccumulators.Empty(),
+            _
           ) => Option((repeat, expand, inlinablePredicates, quantifier, relationship, expansionMode))
         case walk @ RepeatWalk(
             _,
@@ -557,7 +560,8 @@ object RepeatToVarExpandRewriter {
             _,
             _,
             expansionMode,
-            AllReduceAccumulators.Empty()
+            AllReduceAccumulators.Empty(),
+            _
           ) =>
           Option((walk, expand, inlinablePredicates, quantifier, relationship, expansionMode))
         case acyclic @ RepeatAcyclic(
@@ -581,7 +585,8 @@ object RepeatToVarExpandRewriter {
             _,
             _,
             expansionMode,
-            AllReduceAccumulators.Empty()
+            AllReduceAccumulators.Empty(),
+            _
           ) =>
           val inlinableNoneOfNodesPredicates = additionalUniquenessPredicatesForRepeatToVarExpandRewrite(
             acyclic,
@@ -632,7 +637,7 @@ object RepeatToVarExpandRewriter {
         repeatRhs match {
           case Selection(
               Ands(predicatesAfterExpand),
-              expand @ Expand(rhsBeforeExpandExtractor(predicatesBeforeExpand), _, _, _, _, _, ExpandAll)
+              expand @ Expand(rhsBeforeExpandExtractor(predicatesBeforeExpand), _, _, _, _, _, ExpandAll, _)
             ) =>
             Some((
               expand,
@@ -675,13 +680,13 @@ object RepeatToVarExpandRewriter {
         walkRhs match {
           case Selection(
               Ands(predicatesAfterExpand),
-              expand @ Expand(rhsBeforeExpandExtractor(predicatesBeforeExpand), _, _, _, _, _, ExpandAll)
+              expand @ Expand(rhsBeforeExpandExtractor(predicatesBeforeExpand), _, _, _, _, _, ExpandAll, _)
             ) =>
             Some((
               expand,
               (predicatesAfterExpand ++ predicatesBeforeExpand).toSeq
             ))
-          case expand @ Expand(rhsBeforeExpandExtractor(predicatesBeforeExpand), _, _, _, _, _, ExpandAll) =>
+          case expand @ Expand(rhsBeforeExpandExtractor(predicatesBeforeExpand), _, _, _, _, _, ExpandAll, _) =>
             Some((
               expand,
               predicatesBeforeExpand.toSeq
@@ -702,7 +707,7 @@ object RepeatToVarExpandRewriter {
         repeatRhs match {
           case Selection(
               Ands(predicatesAfterExpand),
-              expand @ Expand(rhsBeforeExpandExtractor(predicatesBeforeExpand), _, _, _, _, _, ExpandAll)
+              expand @ Expand(rhsBeforeExpandExtractor(predicatesBeforeExpand), _, _, _, _, _, ExpandAll, _)
             ) =>
             Some((
               expand,

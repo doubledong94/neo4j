@@ -186,7 +186,8 @@ object QuerySolvableByGetDegree {
             (firstNode, secondNode),
             direction,
             types,
-            SimplePatternLength
+            SimplePatternLength,
+            _
           )),
           SetExtractor(),
           patternNodes,
@@ -236,7 +237,8 @@ object ExistsQuerySolvableByGetDegree {
             (firstNode, secondNode),
             direction,
             types,
-            SimplePatternLength
+            SimplePatternLength,
+            _
           )),
           SetExtractor(),
           patternNodes,

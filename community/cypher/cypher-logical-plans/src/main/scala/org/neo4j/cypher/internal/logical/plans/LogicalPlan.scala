@@ -38,6 +38,7 @@ import org.neo4j.cypher.internal.expressions.PropertyKeyToken
 import org.neo4j.cypher.internal.expressions.RelTypeName
 import org.neo4j.cypher.internal.expressions.RelationshipTypeToken
 import org.neo4j.cypher.internal.expressions.SemanticDirection
+import org.neo4j.cypher.internal.expressions.StackAction
 import org.neo4j.cypher.internal.expressions.Variable
 import org.neo4j.cypher.internal.expressions.VariableGrouping
 import org.neo4j.cypher.internal.frontend.phases.ResolvedNonLocalCall
@@ -3252,7 +3253,8 @@ case class Expand(
   types: Seq[RelTypeName],
   maybeTo: Option[LogicalVariable],
   maybeRelName: Option[LogicalVariable],
-  mode: ExpansionMode = ExpandAll
+  mode: ExpansionMode = ExpandAll,
+  stackAction: Option[StackAction] = None
 )(implicit idGen: IdGen)
     extends LogicalUnaryPlan(idGen) {
   override def withLhs(newLHS: LogicalPlan)(idGen: IdGen): LogicalUnaryPlan = copy(source = newLHS)(idGen)
@@ -5718,6 +5720,13 @@ sealed abstract class Repeat(idGen: IdGen)
   def expansionMode: ExpansionMode
   def accumulatorMappings: Set[AllReduceAccumulator]
 
+  /**
+   * The stack actions of the relationships directly contained in the repeated pattern, in the order
+   * they are written in the pattern. Stack actions of nested quantified path patterns belong to the
+   * nested [[Repeat]] and are not part of this sequence.
+   */
+  def stackActions: Seq[StackAction]
+
   override val localAvailableSymbols: Set[LogicalVariable] =
     left.localAvailableSymbols + end + start ++ nodeVariableGroupings.map(_.group) ++ relationshipVariableGroupings.map(
       _.group
@@ -5763,7 +5772,8 @@ case class RepeatTrail(
   previouslyBoundRelationshipGroups: Set[LogicalVariable],
   reverseGroupVariableProjections: Boolean,
   expansionMode: ExpansionMode = ExpandAll,
-  accumulatorMappings: Set[AllReduceAccumulator] = Set.empty
+  accumulatorMappings: Set[AllReduceAccumulator] = Set.empty,
+  stackActions: Seq[StackAction] = Seq.empty
 )(implicit idGen: IdGen) extends Repeat(idGen) {
   override def withLhs(newLHS: LogicalPlan)(idGen: IdGen): LogicalBinaryPlan = copy(left = newLHS)(idGen)
   override def withRhs(newRHS: LogicalPlan)(idGen: IdGen): LogicalBinaryPlan = copy(right = newRHS)(idGen)
@@ -5809,7 +5819,8 @@ case class RepeatWalk(
   reverseGroupVariableProjections: Boolean,
   innerRelationships: Set[LogicalVariable],
   expansionMode: ExpansionMode = ExpandAll,
-  accumulatorMappings: Set[AllReduceAccumulator] = Set.empty
+  accumulatorMappings: Set[AllReduceAccumulator] = Set.empty,
+  stackActions: Seq[StackAction] = Seq.empty
 )(implicit idGen: IdGen) extends Repeat(idGen) {
   override def withLhs(newLHS: LogicalPlan)(idGen: IdGen): LogicalBinaryPlan = copy(left = newLHS)(idGen)
   override def withRhs(newRHS: LogicalPlan)(idGen: IdGen): LogicalBinaryPlan = copy(right = newRHS)(idGen)
@@ -5864,7 +5875,8 @@ case class RepeatAcyclic(
   previouslyBoundRelationshipGroups: Set[LogicalVariable], // in the current GRAPH pattern (MATCH clause)
   reverseGroupVariableProjections: Boolean,
   expansionMode: ExpansionMode = ExpandAll,
-  accumulatorMappings: Set[AllReduceAccumulator] = Set.empty
+  accumulatorMappings: Set[AllReduceAccumulator] = Set.empty,
+  stackActions: Seq[StackAction] = Seq.empty
 )(implicit idGen: IdGen) extends Repeat(idGen) {
   override def withLhs(newLHS: LogicalPlan)(idGen: IdGen): LogicalBinaryPlan = copy(left = newLHS)(idGen)
   override def withRhs(newRHS: LogicalPlan)(idGen: IdGen): LogicalBinaryPlan = copy(right = newRHS)(idGen)

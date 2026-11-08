@@ -345,7 +345,7 @@ case object countStorePlanner {
   ): Option[LogicalPlan] = {
     patternRelationship match {
 
-      case PatternRelationship(relId, (startNodeId, endNodeId), direction, types, SimplePatternLength)
+      case PatternRelationship(relId, (startNodeId, endNodeId), direction, types, SimplePatternLength, _)
         if variableName.forall(name => Set(relId, startNodeId, endNodeId).contains(name)) &&
           noWrongPredicates(Set(startNodeId, endNodeId), selections) =>
         def planRelAggr(fromLabel: Option[LabelName], toLabel: Option[LabelName]): Option[LogicalPlan] =

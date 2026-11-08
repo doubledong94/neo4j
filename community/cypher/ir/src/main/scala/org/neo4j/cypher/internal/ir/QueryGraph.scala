@@ -544,7 +544,7 @@ final case class QueryGraph private (
     val allRelationships = patternRelationships ++ selectivePathPatternsRelationships
 
     allRelationships.collect {
-      case PatternRelationship(rel, _, _, Seq(relType), _) => rel -> relType
+      case PatternRelationship(rel, _, _, Seq(relType), _, _) => rel -> relType
     }.toMap
   }
 

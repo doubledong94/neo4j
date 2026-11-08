@@ -45,7 +45,7 @@ case object unionRelationshipTypeScanLeafPlanner extends LeafPlanner {
       queryGraph.argumentIds.contains(pattern.variable)
 
     queryGraph.patternRelationships.flatMap {
-      case relationship @ PatternRelationship(rel, (_, _), _, types, SimplePatternLength)
+      case relationship @ PatternRelationship(rel, (_, _), _, types, SimplePatternLength, _)
         if types.distinct.length > 1 && !shouldIgnore(relationship) =>
         context.staticComponents.planContext.relationshipTokenIndex.flatMap { relTokenIndex =>
           // UnionRelationshipTypeScan relies on ordering, so we can only use this plan if the relTokenIndex is ordered.

@@ -28,6 +28,7 @@ import org.neo4j.cypher.internal.expressions.LogicalVariable
 import org.neo4j.cypher.internal.expressions.NODE_TYPE
 import org.neo4j.cypher.internal.expressions.PropertyKeyName
 import org.neo4j.cypher.internal.expressions.RELATIONSHIP_TYPE
+import org.neo4j.cypher.internal.runtime.interpreted.pipes.StackActionRuntime
 import org.neo4j.cypher.internal.frontend.phases.QueryLanguage.toKernelScope
 import org.neo4j.cypher.internal.frontend.phases.ResolvedNonLocalCall
 import org.neo4j.cypher.internal.ir.CreatePattern
@@ -169,6 +170,7 @@ import org.neo4j.cypher.internal.logical.plans.RemoteNodeIndexSeek
 import org.neo4j.cypher.internal.logical.plans.RemoteNodeUniqueIndexSeek
 import org.neo4j.cypher.internal.logical.plans.RemoveLabels
 import org.neo4j.cypher.internal.logical.plans.RepeatAcyclic
+import org.neo4j.cypher.internal.logical.plans.Repeat
 import org.neo4j.cypher.internal.logical.plans.RepeatTrail
 import org.neo4j.cypher.internal.logical.plans.RepeatWalk
 import org.neo4j.cypher.internal.logical.plans.RightOuterHashJoin
@@ -1632,6 +1634,7 @@ case class InterpretedPipeMapper(
           if (ands.exprs.size == 1) buildExpression(ands.exprs.head) else buildExpression(ands)
         FilterPipe(source, predicateExpression)(id = id)
 
+      // Stack actions are applied by the enclosing RepeatPipe, not by the Expand itself.
       case Expand(
           _,
           fromName,
@@ -1639,7 +1642,8 @@ case class InterpretedPipeMapper(
           types: Seq[internal.expressions.RelTypeName],
           maybeToName,
           maybeRelName,
-          ExpandAll
+          ExpandAll,
+          _
         ) =>
         ExpandAllPipe(
           source,
@@ -1650,6 +1654,7 @@ case class InterpretedPipeMapper(
           RelationshipTypes(types.toArray)
         )(id = id)
 
+      // Stack actions are applied by the enclosing RepeatPipe, not by the Expand itself.
       case Expand(
           _,
           fromName,
@@ -1657,7 +1662,8 @@ case class InterpretedPipeMapper(
           types: Seq[internal.expressions.RelTypeName],
           Some(toName),
           maybeRelName,
-          ExpandInto
+          ExpandInto,
+          _
         ) =>
         ExpandIntoPipe(
           source,
@@ -2352,8 +2358,16 @@ case class InterpretedPipeMapper(
     TraversalPredicates.create(nodePredicates, relationshipPredicates, buildPredicate(id, _))
   }
 
+  /**
+   * Compile the stack actions of stack-annotated expands inside the inner plan of a Repeat, in pattern order.
+   */
+  private def compiledStackActions(repeat: Repeat): Array[StackActionRuntime] = {
+    val inner = repeat.rhs.get
+    StackActionRuntime.compile(repeat, expressionConverters.toCommandExpression(inner.id, _))
+  }
   override def onTwoChildPlan(plan: LogicalPlan, lhs: Pipe, rhs: Pipe): Pipe = {
     val id = plan.id
+
     val buildExpression = getBuildExpression(id)
     plan match {
       case CartesianProduct(_, _) =>
@@ -2557,7 +2571,8 @@ case class InterpretedPipeMapper(
           previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections,
           expansionMode,
-          accumulatorMappings
+          accumulatorMappings,
+          _
         ) =>
         val runtimeAccumulatorMappings = accumulatorMappings.toArray.map(acc =>
           AllReduceAcc(expressionConverters.toCommandExpression(id, acc.initial), acc.previous.name, acc.next.name)
@@ -2588,10 +2603,11 @@ case class InterpretedPipeMapper(
           ),
           reverseGroupVariableProjections,
           nodeInScope,
-          runtimeAccumulatorMappings
+          runtimeAccumulatorMappings,
+          stackActions = compiledStackActions(repeat)
         )(id = id)
 
-      case RepeatTrail(
+      case repeat @ RepeatTrail(
           _,
           _,
           repetition,
@@ -2606,7 +2622,8 @@ case class InterpretedPipeMapper(
           previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections,
           expansionMode,
-          accumulatorMappings
+          accumulatorMappings,
+          _
         ) =>
         val runtimeAccumulatorMappings = accumulatorMappings.toArray.map(acc =>
           AllReduceAcc(expressionConverters.toCommandExpression(id, acc.initial), acc.previous.name, acc.next.name)
@@ -2634,10 +2651,11 @@ case class InterpretedPipeMapper(
           ),
           reverseGroupVariableProjections,
           nodeInScope,
-          runtimeAccumulatorMappings
+          runtimeAccumulatorMappings,
+          stackActions = compiledStackActions(repeat)
         )(id = id)
 
-      case RepeatWalk(
+      case repeat @ RepeatWalk(
           _,
           _,
           repetition,
@@ -2650,7 +2668,8 @@ case class InterpretedPipeMapper(
           reverseGroupVariableProjections,
           innerRelationships,
           expansionMode,
-          accumulatorMappings
+          accumulatorMappings,
+          _
         ) =>
         val runtimeAccumulatorMappings = accumulatorMappings.toArray.map(acc =>
           AllReduceAcc(expressionConverters.toCommandExpression(id, acc.initial), acc.previous.name, acc.next.name)
@@ -2673,7 +2692,8 @@ case class InterpretedPipeMapper(
           RepeatPipe.WalkModeConstraint,
           reverseGroupVariableProjections,
           nodeInScope,
-          runtimeAccumulatorMappings
+          runtimeAccumulatorMappings,
+          stackActions = compiledStackActions(repeat)
         )(id = id)
 
       case x =>

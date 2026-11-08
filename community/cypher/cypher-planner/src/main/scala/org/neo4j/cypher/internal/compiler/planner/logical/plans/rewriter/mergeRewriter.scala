@@ -61,7 +61,8 @@ case class mergeRewriter(supportsFastExpandInto: Boolean) extends Rewriter with 
           Seq(relType),
           Some(to),
           Some(rel),
-          ExpandInto
+          ExpandInto,
+          _
         ),
         _,
         _,

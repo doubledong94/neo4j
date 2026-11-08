@@ -151,7 +151,7 @@ object RelationshipIndexLeafPlanner extends IndexCompatiblePredicatesProvider {
 
     val predicates = qg.selections.flatPredicatesSet
     val patternRelationshipsMap: Map[LogicalVariable, PatternRelationship] = qg.patternRelationships.collect({
-      case pattern @ PatternRelationship(rel, _, _, Seq(_), SimplePatternLength) if !shouldIgnore(pattern) =>
+      case pattern @ PatternRelationship(rel, _, _, Seq(_), SimplePatternLength, _) if !shouldIgnore(pattern) =>
         rel -> pattern
     }).toMap
 
@@ -209,7 +209,7 @@ object RelationshipIndexLeafPlanner extends IndexCompatiblePredicatesProvider {
     def valid(variable: LogicalVariable): Boolean = !argumentIds.contains(variable)
 
     generalCompatiblePredicates ++ patterns.flatMap {
-      case PatternRelationship(variable, _, _, Seq(RelTypeName(relTypeName)), _) if valid(variable) =>
+      case PatternRelationship(variable, _, _, Seq(RelTypeName(relTypeName)), _, _) if valid(variable) =>
         val constrainedPropNames =
           if (
             indexPredicateProviderContext.outerPlanHasUpdates || planContext.txStateHasChanges()

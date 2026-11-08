@@ -1864,7 +1864,7 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _), _, Seq(Variable("a.prop"))) => ()
+      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _, _), _, Seq(Variable("a.prop"))) => ()
     }
   }
 
@@ -1879,7 +1879,7 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _), _, Seq(Variable("x"))) => ()
+      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _, _), _, Seq(Variable("x"))) => ()
     }
   }
 
@@ -1894,7 +1894,7 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _), _, Seq(Variable("x"))) => ()
+      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _, _), _, Seq(Variable("x"))) => ()
     }
   }
 
@@ -1909,7 +1909,7 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _), _, Seq(Variable("x"))) => ()
+      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _, _), _, Seq(Variable("x"))) => ()
     }
   }
 
@@ -1924,7 +1924,7 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _), _, Seq(Variable("x"))) => ()
+      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _, _), _, Seq(Variable("x"))) => ()
     }
   }
 
@@ -1941,7 +1941,7 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _), _, Seq(Variable("x"))) => ()
+      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _, _), _, Seq(Variable("x"))) => ()
     }
   }
 
@@ -1956,7 +1956,7 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _), _, Seq(Variable("a.prop+ 1"))) => ()
+      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _, _), _, Seq(Variable("a.prop+ 1"))) => ()
     }
   }
 
@@ -1971,7 +1971,7 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _), _, Seq(Variable("p1"))) => ()
+      case OrderedDistinct(Expand(_: Sort, _, _, _, _, _, _, _), _, Seq(Variable("p1"))) => ()
     }
   }
 
@@ -2099,7 +2099,7 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
 
     plan should beLike {
       case OrderedAggregation(
-          Expand(Expand(_: Sort, _, _, _, _, _, _), _, _, _, _, _, _),
+          Expand(Expand(_: Sort, _, _, _, _, _, _, _), _, _, _, _, _, _, _),
           _,
           _,
           Seq(Variable("a.prop"))
@@ -2118,7 +2118,12 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedAggregation(Expand(Expand(_: Sort, _, _, _, _, _, _), _, _, _, _, _, _), _, _, Seq(Variable("x"))) =>
+      case OrderedAggregation(
+          Expand(Expand(_: Sort, _, _, _, _, _, _, _), _, _, _, _, _, _, _),
+          _,
+          _,
+          Seq(Variable("x"))
+        ) =>
         ()
     }
   }
@@ -2134,7 +2139,12 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedAggregation(Expand(Expand(_: Sort, _, _, _, _, _, _), _, _, _, _, _, _), _, _, Seq(Variable("x"))) =>
+      case OrderedAggregation(
+          Expand(Expand(_: Sort, _, _, _, _, _, _, _), _, _, _, _, _, _, _),
+          _,
+          _,
+          Seq(Variable("x"))
+        ) =>
         ()
     }
   }
@@ -2150,7 +2160,12 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedAggregation(Expand(Expand(_: Sort, _, _, _, _, _, _), _, _, _, _, _, _), _, _, Seq(Variable("x"))) =>
+      case OrderedAggregation(
+          Expand(Expand(_: Sort, _, _, _, _, _, _, _), _, _, _, _, _, _, _),
+          _,
+          _,
+          Seq(Variable("x"))
+        ) =>
         ()
     }
   }
@@ -2167,7 +2182,12 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedAggregation(Expand(Expand(_: Sort, _, _, _, _, _, _), _, _, _, _, _, _), _, _, Seq(Variable("x"))) =>
+      case OrderedAggregation(
+          Expand(Expand(_: Sort, _, _, _, _, _, _, _), _, _, _, _, _, _, _),
+          _,
+          _,
+          Seq(Variable("x"))
+        ) =>
         ()
     }
   }
@@ -2183,7 +2203,12 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
       .stripProduceResults
 
     plan should beLike {
-      case OrderedAggregation(Expand(Expand(_: Sort, _, _, _, _, _, _), _, _, _, _, _, _), _, _, Seq(Variable("p1"))) =>
+      case OrderedAggregation(
+          Expand(Expand(_: Sort, _, _, _, _, _, _, _), _, _, _, _, _, _, _),
+          _,
+          _,
+          Seq(Variable("p1"))
+        ) =>
         ()
     }
   }
@@ -2219,7 +2244,7 @@ abstract class OrderPlanningIntegrationTest(queryGraphSolverSetup: QueryGraphSol
 
     plan should beLike {
       case OrderedAggregation(
-          Expand(Sort(Projection(_: Expand, _), _), _, _, Seq(RelTypeName("Q")), None, None, _),
+          Expand(Sort(Projection(_: Expand, _), _), _, _, Seq(RelTypeName("Q")), None, None, _, _),
           _,
           _,
           Seq(Variable("p1"))

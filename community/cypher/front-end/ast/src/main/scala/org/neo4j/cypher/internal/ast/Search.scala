@@ -168,14 +168,14 @@ object Search {
 
     private def checkRelationshipPattern(relationshipPattern: RelationshipPattern): PatternComplexity = {
       relationshipPattern match {
-        case RelationshipPattern(None, Some(pred), _, _, _, _) =>
+        case RelationshipPattern(None, Some(pred), _, _, _, _, _) =>
           Complex(Reason.InvalidPredicate, pred.position)
-        case RelationshipPattern(None, _, _, Some(pred), _, _) =>
+        case RelationshipPattern(None, _, _, Some(pred), _, _, _) =>
           Complex(Reason.InvalidPredicate, pred.position)
-        case RelationshipPattern(None, _, _, _, Some(pred), _) =>
+        case RelationshipPattern(None, _, _, _, Some(pred), _, _) =>
           Complex(Reason.InvalidPredicate, pred.position)
         // Variable length relationship
-        case r @ RelationshipPattern(None, _, Some(_), _, _, _) =>
+        case r @ RelationshipPattern(None, _, Some(_), _, _, _, _) =>
           Complex(Reason.TooComplexMatch, r.position)
         case _ => Simple
       }

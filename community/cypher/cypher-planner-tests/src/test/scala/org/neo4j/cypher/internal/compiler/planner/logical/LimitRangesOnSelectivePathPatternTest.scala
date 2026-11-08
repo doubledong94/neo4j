@@ -119,6 +119,75 @@ class LimitRangesOnSelectivePathPatternTest extends CypherPlannerTestSuite with 
     rewrittenSpp shouldEqual Set(spp)
   }
 
+  // Nested quantified path patterns that bind variables are not supported in selective path patterns
+  // (they are rejected during semantic analysis), so the nested cases are tested on the IR directly.
+  test("should leave the max limit of a QPP containing a nested QPP untouched") {
+    // One repetition of the outer QPP traverses the nested QPP twice, i.e. 2 relationships, so 51 repetitions
+    // already exceed the configured limit of 100.
+    val outerQpp = getQppWithNestedLimits(1, UpperBound.Limited(51), 2, UpperBound.Limited(2))
+    val rewrittenSpp = rewriteSelectivePathPattern(outerQpp)
+
+    val rewrittenOuterQpp = rewrittenSpp.pathPattern.connections.head.asInstanceOf[QuantifiedPathPattern]
+    // The selective path runtime does not populate the group variable of a QPP that contains a nested QPP,
+    // so no size predicate can express the range.
+    rewrittenOuterQpp.repetition should equal(Repetition(1, UpperBound.Limited(51)))
+    rewrittenOuterQpp.patternRelationships.head.asInstanceOf[QuantifiedPathPattern].repetition should equal(
+      Repetition(2, UpperBound.Limited(2))
+    )
+    rewrittenSpp.selections.flatPredicates.flatMap(sizeComparison) shouldBe empty
+  }
+
+  test("should leave the min limit of a QPP containing a nested QPP untouched") {
+    val outerQpp = getQppWithNestedLimits(51, UpperBound.unlimited, 2, UpperBound.Limited(2))
+    val rewrittenSpp = rewriteSelectivePathPattern(outerQpp)
+
+    val rewrittenOuterQpp = rewrittenSpp.pathPattern.connections.head.asInstanceOf[QuantifiedPathPattern]
+    rewrittenOuterQpp.repetition should equal(Repetition(51, UpperBound.unlimited))
+    rewrittenOuterQpp.patternRelationships.head.asInstanceOf[QuantifiedPathPattern].repetition should equal(
+      Repetition(2, UpperBound.Limited(2))
+    )
+    rewrittenSpp.selections.flatPredicates.flatMap(sizeComparison) shouldBe empty
+  }
+
+  test("should leave a nested QPP's own range untouched, since no predicate can express it") {
+    val outerQpp = getQppWithNestedLimits(1, UpperBound.Limited(2), 101, UpperBound.Limited(101))
+    val rewrittenSpp = rewriteSelectivePathPattern(outerQpp)
+
+    val rewrittenOuterQpp = rewrittenSpp.pathPattern.connections.head.asInstanceOf[QuantifiedPathPattern]
+    val rewrittenNestedQpp = rewrittenOuterQpp.patternRelationships.head.asInstanceOf[QuantifiedPathPattern]
+
+    rewrittenOuterQpp.repetition should equal(Repetition(1, UpperBound.Limited(2)))
+    rewrittenNestedQpp.repetition should equal(Repetition(101, UpperBound.Limited(101)))
+    rewrittenSpp.selections.flatPredicates.flatMap(sizeComparison) shouldBe empty
+  }
+
+  test("should leave nested QPP ranges below the limit untouched") {
+    val outerQpp = getQppWithNestedLimits(1, UpperBound.Limited(2), 2, UpperBound.Limited(2))
+    val rewrittenSpp = rewriteSelectivePathPattern(outerQpp)
+
+    val rewrittenOuterQpp = rewrittenSpp.pathPattern.connections.head.asInstanceOf[QuantifiedPathPattern]
+    val rewrittenNestedQpp = rewrittenOuterQpp.patternRelationships.head.asInstanceOf[QuantifiedPathPattern]
+
+    rewrittenOuterQpp.repetition should equal(Repetition(1, UpperBound.Limited(2)))
+    rewrittenNestedQpp.repetition should equal(Repetition(2, UpperBound.Limited(2)))
+    rewrittenSpp.selections.flatPredicates.flatMap(sizeComparison) shouldBe empty
+  }
+
+  private def sizeComparison(expression: Expression): Option[(String, LogicalVariable, String)] =
+    expression match {
+      case GreaterThanOrEqual(
+          FunctionInvocation(_, _, Seq(variable: LogicalVariable), _, _, _, _),
+          SignedDecimalIntegerLiteral(value)
+        ) =>
+        Some((">=", variable, value))
+      case LessThanOrEqual(
+          FunctionInvocation(_, _, Seq(variable: LogicalVariable), _, _, _, _),
+          SignedDecimalIntegerLiteral(value)
+        ) =>
+        Some(("<=", variable, value))
+      case _ => None
+    }
+
   test("should move QPP limit from multiple QPPs to SPP predicate when above 100") {
     val rewrittenSpp = buildSinglePlannerQueryAndRewriteSelectivePathPattern(
       "MATCH ANY SHORTEST ((start) ((a)-[r]->(b)){1,100} (end) ((c)-[s]->(d)){1,100} (end2)) RETURN 1 AS one"
@@ -242,6 +311,49 @@ class LimitRangesOnSelectivePathPatternTest extends CypherPlannerTestSuite with 
 
     val spp = getSPPWithLimits(Seq((1, UpperBound.Limited(1000))), Seq.empty)
     rewrittenSpp shouldEqual Set(spp)
+  }
+
+  private def rewriteSelectivePathPattern(qpp: QuantifiedPathPattern): SelectivePathPattern = {
+    val spp = SelectivePathPattern(
+      pathPattern = NodeConnections(NonEmptyList(qpp)),
+      Selections.from(Seq(Unique(v"r")(pos))),
+      SelectivePathPattern.Selector.Shortest(CountInteger(1))
+    )
+    LimitRangesOnSelectivePathPattern(100).apply(spp)
+  }
+
+  /**
+   * Builds the IR of `((start) (((a)-[r]->(b)){nestedMin,nestedMax}){outerMin,outerMax} (end))` directly, since
+   * a nested quantified path pattern that binds variables is rejected in a selective path pattern.
+   */
+  private def getQppWithNestedLimits(
+    outerMin: Int,
+    outerMax: UpperBound,
+    nestedMin: Int,
+    nestedMax: UpperBound
+  ): QuantifiedPathPattern = {
+    val nested = QuantifiedPathPattern(
+      leftBinding = NodeBinding(v"a", v"f1"),
+      rightBinding = NodeBinding(v"b", v"f2"),
+      patternRelationships = NonEmptyList(PatternRelationship(
+        v"r",
+        (v"a", v"b"),
+        SemanticDirection.OUTGOING,
+        Seq.empty,
+        SimplePatternLength
+      )),
+      repetition = Repetition(nestedMin, nestedMax),
+      nodeVariableGroupings = Set(variableGrouping(v"a", v"a"), variableGrouping(v"b", v"b")),
+      relationshipVariableGroupings = Set(variableGrouping(v"r", v"r"))
+    )
+    QuantifiedPathPattern(
+      leftBinding = NodeBinding(v"f1", v"start"),
+      rightBinding = NodeBinding(v"f2", v"end"),
+      patternRelationships = NonEmptyList(nested),
+      repetition = Repetition(outerMin, outerMax),
+      nodeVariableGroupings = Set("a", "b", "f1", "f2").map(name => variableGrouping(varFor(name), varFor(name))),
+      relationshipVariableGroupings = Set(variableGrouping(v"r", v"r"))
+    )
   }
 
   private def buildSinglePlannerQueryAndRewriteSelectivePathPattern(

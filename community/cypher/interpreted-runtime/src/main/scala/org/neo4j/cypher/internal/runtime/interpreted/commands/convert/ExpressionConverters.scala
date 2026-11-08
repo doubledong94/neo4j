@@ -25,6 +25,9 @@ import org.neo4j.cypher.internal.expressions.ElementIdToLongId
 import org.neo4j.cypher.internal.expressions.EntityType
 import org.neo4j.cypher.internal.expressions.Expression
 import org.neo4j.cypher.internal.expressions.LogicalVariable
+import org.neo4j.cypher.internal.expressions.NestedRepeatPathGroup
+import org.neo4j.cypher.internal.expressions.NodeRelPair
+import org.neo4j.cypher.internal.expressions.RepeatPathGroup
 import org.neo4j.cypher.internal.expressions.SemanticDirection
 import org.neo4j.cypher.internal.logical.plans.ManySeekableArgs
 import org.neo4j.cypher.internal.logical.plans.SeekableArgs
@@ -42,6 +45,9 @@ import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.Projec
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.multiUndirectedRelationshipProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.multiUndirectedRelationshipWithKnownTargetProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.nilProjector
+import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.NestedRepeatProjection
+import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.RepeatEntityProjection
+import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.RepeatGroupProjection
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.quantifiedPathProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.singleIncomingRelationshipProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.singleNodeProjector
@@ -272,7 +278,7 @@ class ExpressionConverters(
         multiUndirectedRelationshipProjector(rel.name, project(next))
 
       case internal.expressions.RepeatPathStep(variables, toNode, next) =>
-        quantifiedPathProjector(variables.flatMap(_.variables).map(_.name), toNode.name, project(next))
+        quantifiedPathProjector(variables.map(toRepeatGroupProjection), toNode.name, project(next))
 
       case internal.expressions.NilPathStep() =>
         nilProjector
@@ -283,6 +289,12 @@ class ExpressionConverters(
 
     ProjectedPath(project(e.step))
   }
+
+  private def toRepeatGroupProjection(group: RepeatPathGroup): RepeatGroupProjection =
+    group match {
+      case NodeRelPair(node, relationship) => RepeatEntityProjection(node.name, relationship.name)
+      case NestedRepeatPathGroup(groups)   => NestedRepeatProjection(groups.map(toRepeatGroupProjection))
+    }
 
   private def compile[T](call: (ExpressionConverter, ExpressionConverters) => Option[T], errorMsg: => String): T = {
     maybeMainConverter match {

@@ -50,6 +50,7 @@ import org.neo4j.cypher.internal.expressions.SemanticDirection
 import org.neo4j.cypher.internal.expressions.SemanticDirection.BOTH
 import org.neo4j.cypher.internal.expressions.SemanticDirection.OUTGOING
 import org.neo4j.cypher.internal.expressions.SignedDecimalIntegerLiteral
+import org.neo4j.cypher.internal.expressions.StackAction
 import org.neo4j.cypher.internal.expressions.UnPositionedVariable.varFor
 import org.neo4j.cypher.internal.expressions.VariableGrouping
 import org.neo4j.cypher.internal.frontend.phases.ProcedureSignature
@@ -478,13 +479,16 @@ object LogicalPlanToPlanBuilderString {
           seqParam(mutations)
         )
 
-      case Expand(_, from, dir, types, to, rel, _) =>
+      case Expand(_, from, dir, types, to, rel, _, stackAction) =>
         val (dirStrA, dirStrB) = arrows(dir)
         val typeStr = relTypeStr(types)
         val fromName = escapeIdentifier(from.name)
         val relName = rel.map(n => escapeIdentifier(n.name)).getOrElse("")
         val toName = to.map(n => escapeIdentifier(n.name)).getOrElse("")
-        s"($fromName)$dirStrA[$relName$typeStr]$dirStrB($toName)".quoted
+        params(
+          s"($fromName)$dirStrA[$relName$typeStr]$dirStrB($toName)".quoted,
+          stackActionParam(stackAction)
+        )
 
       case VarExpand(
           _,
@@ -540,7 +544,7 @@ object LogicalPlanToPlanBuilderString {
           _,
           ShortestRelationshipPattern(
             maybePathName,
-            PatternRelationship(relName, (from, to), dir, types, length),
+            PatternRelationship(relName, (from, to), dir, types, length, _),
             single
           ),
           nodePredicates,
@@ -896,7 +900,8 @@ object LogicalPlanToPlanBuilderString {
           previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections,
           expansionMode,
-          accumulators
+          accumulators,
+          stackActions
         ) =>
         trailParametersString(
           repetition,
@@ -911,7 +916,8 @@ object LogicalPlanToPlanBuilderString {
           previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections,
           expansionMode,
-          accumulators
+          accumulators,
+          stackActions
         )
       case RepeatAcyclic(
           _,
@@ -931,7 +937,8 @@ object LogicalPlanToPlanBuilderString {
           previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections,
           expansionMode,
-          accumulators
+          accumulators,
+          stackActions
         ) =>
         acyclicParameterString(
           repetition,
@@ -949,7 +956,8 @@ object LogicalPlanToPlanBuilderString {
           previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections,
           expansionMode,
-          accumulators
+          accumulators,
+          stackActions
         )
       case BidirectionalRepeatTrail(
           _,
@@ -979,7 +987,8 @@ object LogicalPlanToPlanBuilderString {
           previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections,
           ExpandAll,
-          Set.empty
+          Set.empty,
+          Seq.empty
         )
       case RepeatWalk(
           _,
@@ -994,7 +1003,8 @@ object LogicalPlanToPlanBuilderString {
           reverseGroupVariableProjections,
           innerRelationships,
           expansionMode,
-          accumulators
+          accumulators,
+          stackActions
         ) =>
         walkParametersString(
           repetition,
@@ -1007,7 +1017,8 @@ object LogicalPlanToPlanBuilderString {
           reverseGroupVariableProjections,
           innerRelationships,
           expansionMode,
-          accumulators
+          accumulators,
+          stackActions
         )
 
       case NodeByIdSeek(idName, ids, argumentIds) =>
@@ -2263,7 +2274,8 @@ object LogicalPlanToPlanBuilderString {
     previouslyBoundRelationshipGroups: Set[LogicalVariable],
     reverseGroupVariableProjections: Boolean,
     expansionMode: ExpansionMode,
-    accumulators: Set[AllReduceAccumulator]
+    accumulators: Set[AllReduceAccumulator],
+    stackActions: Seq[StackAction]
   ) =
     call(
       "AcyclicParameters",
@@ -2283,7 +2295,8 @@ object LogicalPlanToPlanBuilderString {
       previouslyBoundRelationshipGroups,
       reverseGroupVariableProjections,
       expansionMode,
-      accumulators
+      accumulators,
+      conditional(stackActions.nonEmpty)(seqParam(stackActions.map(stackActionStringParam)))
     )
 
   private def trailParametersString(
@@ -2299,7 +2312,8 @@ object LogicalPlanToPlanBuilderString {
     previouslyBoundRelationshipGroups: Set[LogicalVariable],
     reverseGroupVariableProjections: Boolean,
     expansionMode: ExpansionMode,
-    accumulators: Set[AllReduceAccumulator]
+    accumulators: Set[AllReduceAccumulator],
+    stackActions: Seq[StackAction]
   ) =
     call(
       "TrailParameters",
@@ -2316,7 +2330,8 @@ object LogicalPlanToPlanBuilderString {
       previouslyBoundRelationshipGroups,
       reverseGroupVariableProjections,
       expansionMode,
-      accumulators
+      accumulators,
+      conditional(stackActions.nonEmpty)(seqParam(stackActions.map(stackActionStringParam)))
     )
 
   private def walkParametersString(
@@ -2330,7 +2345,8 @@ object LogicalPlanToPlanBuilderString {
     reverseGroupVariableProjections: Boolean,
     innerRelationships: Set[LogicalVariable],
     expansionMode: ExpansionMode,
-    accumulators: Set[AllReduceAccumulator]
+    accumulators: Set[AllReduceAccumulator],
+    stackActions: Seq[StackAction]
   ) =
     call(
       "WalkParameters",
@@ -2345,8 +2361,30 @@ object LogicalPlanToPlanBuilderString {
       reverseGroupVariableProjections,
       innerRelationships,
       expansionMode,
-      accumulators
+      accumulators,
+      conditional(stackActions.nonEmpty)(seqParam(stackActions.map(stackActionStringParam)))
     )
+
+  /**
+   * A stack action in the compact syntax understood by `AbstractLogicalPlanBuilder.parseStackAction`,
+   * i.e. without the `STACK` keyword and in Cypher syntax order, e.g. `SIGNED POP BALANCED call: r.p`.
+   */
+  private def stackActionString(action: StackAction): String = {
+    val stackPart = action.stack.map(s => s"${escapeIdentifier(s.name)}: ").getOrElse("")
+    val keyPart = action.key.map(expressionStringifier(_)).getOrElse("")
+    s"${if (action.signed) "SIGNED " else ""}${action.keyword} " +
+      s"${if (action.requiresBalance) "BALANCED" else "UNBALANCED"} $stackPart$keyPart"
+  }
+
+  private def stackActionStringParam(action: StackAction): Param =
+    Value(sb => sb.append("\"").append(StringEscapeUtils.escapeJava(stackActionString(action))).append("\""))
+
+  private def stackActionParam(stackAction: Option[StackAction]): Param =
+    stackAction match {
+      case Some(action) =>
+        Value(sb => sb.append("stackAction = Some(").append(stackActionStringParam(action).toString).append(")"))
+      case None => Empty
+    }
 
   private def pushdownOperatorsString(
     remoteBatchPropertiesWithPushdownOperators: RemoteBatchPropertiesWithPushdownOperators

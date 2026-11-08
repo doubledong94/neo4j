@@ -296,7 +296,7 @@ object OrLeafPlanner {
   final case object InlinedRelationshipTypePredicateKind extends PredicateKind {
 
     override def findDisjunctions(qg: QueryGraph): Seq[DisjunctionForOneVariable] = qg.patternRelationships.collect {
-      case PatternRelationship(rel, _, _, types, SimplePatternLength) if types.distinct.length > 1 =>
+      case PatternRelationship(rel, _, _, types, SimplePatternLength, _) if types.distinct.length > 1 =>
         val interestingOrderCandidates = for {
           // ASC before DESC because it is slightly cheaper
           indexOrder <- Seq(Asc(_, Map.empty), Desc(_, Map.empty))
@@ -327,7 +327,7 @@ object OrLeafPlanner {
       if (!includesHasTypes(disjunction)) {
         qg.patternRelationships.toSeq.collect {
           // PatternRelationships that have inlined type predicates
-          case rel @ PatternRelationship(disjunction.`variable`, _, _, types, SimplePatternLength) =>
+          case rel @ PatternRelationship(disjunction.`variable`, _, _, types, SimplePatternLength, _) =>
             types.map(InlinedRelationshipTypePredicate(rel.variable, _))
         }.flatten
       } else {
@@ -338,7 +338,7 @@ object OrLeafPlanner {
     def addTypesToRelationship(qg: QueryGraph, variable: LogicalVariable, types: Seq[RelTypeName]): QueryGraph = {
       // Replace the rel without a predicate with a rel with a predicate
       val relWithoutInlinedTypePredicate = qg.patternRelationships.collectFirst {
-        case pr @ PatternRelationship(`variable`, _, _, _, _) => pr
+        case pr @ PatternRelationship(`variable`, _, _, _, _, _) => pr
       }.head
       val relWithInlinedTypePredicate = relWithoutInlinedTypePredicate.copy(types = types)
       qg
@@ -355,7 +355,7 @@ object OrLeafPlanner {
       val disjunction = disjunctionWithRelatedPredicates.disjunction
       val relTypes = solvedQgs.map { solvedQG =>
         solvedQG.patternRelationships.collectFirst {
-          case PatternRelationship(disjunction.`variable`, _, _, Seq(singleType), _) => singleType
+          case PatternRelationship(disjunction.`variable`, _, _, Seq(singleType), _, _) => singleType
         }
       }
 
@@ -376,8 +376,8 @@ object OrLeafPlanner {
       InlinedRelationshipTypePredicateKind.addTypesToRelationship(qg, variable, Seq(typ))
 
     override def containedIn(qg: QueryGraph): Boolean = qg.patternRelationships.exists {
-      case PatternRelationship(`variable`, _, _, Seq(`typ`), _) => true
-      case _                                                    => false
+      case PatternRelationship(`variable`, _, _, Seq(`typ`), _, _) => true
+      case _                                                       => false
     }
 
     override def toString: String = ExpressionStringifier(e => e.asCanonicalStringVal)(

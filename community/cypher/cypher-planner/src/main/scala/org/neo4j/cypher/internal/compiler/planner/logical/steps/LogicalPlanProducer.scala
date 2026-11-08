@@ -1373,7 +1373,7 @@ case class LogicalPlanProducer(
             })
         }
     annotate(
-      Expand(left, from, dir, pattern.types, to, pattern.variable, mode),
+      new Expand(left, from, dir, pattern.types, Some(to), Some(pattern.variable), mode, pattern.stackAction),
       solved,
       ProvidedOrder.Left,
       cachedPropertiesPerPlan.get(left.id),
@@ -1578,6 +1578,11 @@ case class LogicalPlanProducer(
       }
 
     val providedOrderRule = ProvidedOrder.Left
+    // Stack actions of the relationships directly contained in this quantified path pattern, in
+    // pattern order. Nested quantified path patterns carry their own actions on their own Repeat.
+    val stackActions = pattern.patternRelationships.toIndexedSeq.collect {
+      case relationship: PatternRelationship if relationship.stackAction.isDefined => relationship.stackAction.get
+    }
     val repeatPlan = pathMode match {
       case TraversalPathMode.Trail =>
         RepeatTrail(
@@ -1595,7 +1600,8 @@ case class LogicalPlanProducer(
           previouslyBoundRelationshipGroups = previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections = reverseGroupVariableProjections,
           expansionMode = expansionMode,
-          accumulatorMappings = rewrittenAllReduceAccumulators
+          accumulatorMappings = rewrittenAllReduceAccumulators,
+          stackActions = stackActions
         )
       case TraversalPathMode.Walk =>
         RepeatWalk(
@@ -1611,7 +1617,8 @@ case class LogicalPlanProducer(
           reverseGroupVariableProjections = reverseGroupVariableProjections,
           innerRelationships = pattern.relationshipVariableGroupings.map(_.singleton),
           expansionMode = expansionMode,
-          accumulatorMappings = rewrittenAllReduceAccumulators
+          accumulatorMappings = rewrittenAllReduceAccumulators,
+          stackActions = stackActions
         )
       case TraversalPathMode.Acyclic =>
         RepeatAcyclic(
@@ -1632,7 +1639,8 @@ case class LogicalPlanProducer(
           previouslyBoundRelationshipGroups = previouslyBoundRelationshipGroups,
           reverseGroupVariableProjections = reverseGroupVariableProjections,
           expansionMode = expansionMode,
-          accumulatorMappings = rewrittenAllReduceAccumulators
+          accumulatorMappings = rewrittenAllReduceAccumulators,
+          stackActions = stackActions
         )
     }
     annotate(
@@ -3854,6 +3862,10 @@ case class LogicalPlanProducer(
     disallowSameNode: Boolean = true,
     context: LogicalPlanningContext
   ): LogicalPlan = {
+    if (shortestRelationship.rel.stackAction.isDefined)
+      throw new UnsupportedOperationException(
+        "Stack constraints are not supported together with shortest/any path selection"
+      )
 
     val (predicateWithIrExpressionReferencingPath, otherPathPredicates) = {
       val variables = shortestRelationship.pathAndRelationshipVariables
@@ -3946,7 +3958,10 @@ case class LogicalPlanProducer(
       selector,
       solvedExpressionAsString,
       reverseGroupVariableProjections,
-      LengthBounds(pathLength.min, pathLength.maybeMax),
+      LengthBounds(
+        math.min(pathLength.min, Int.MaxValue.toLong).toInt,
+        pathLength.maybeMax.map(max => math.min(max, Int.MaxValue.toLong).toInt)
+      ),
       pathMode
     )
     annotate(plan, solved, ProvidedOrder.Left, cachedPropertiesPerPlan.get(inner.id), context)

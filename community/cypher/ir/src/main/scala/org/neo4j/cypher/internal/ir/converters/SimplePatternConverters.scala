@@ -92,7 +92,8 @@ object SimplePatternConverters {
       boundaryNodes = (getNodePatternVariableName(leftNode), getNodePatternVariableName(rightNode)),
       dir = relationship.direction,
       types = getRelTypes(relationship.labelExpression),
-      length = convertRelationshipLength(relationship.length)
+      length = convertRelationshipLength(relationship.length),
+      stackAction = relationship.stackAction
     )
 
   private def getRelationshipPatternVariableName(relationshipPattern: RelationshipPattern): LogicalVariable =

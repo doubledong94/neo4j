@@ -1468,7 +1468,7 @@ class CardinalityIntegrationTest extends CypherPlannerTestSuite with Cardinality
       builder.build(),
       query,
       {
-        case Expand(_: Argument, _, _, _, _, _, _) => true
+        case Expand(_: Argument, _, _, _, _, _, _, _) => true
       },
       a * r1 / a.toDouble
     )
@@ -1503,7 +1503,7 @@ class CardinalityIntegrationTest extends CypherPlannerTestSuite with Cardinality
       builder.build(),
       query,
       {
-        case Expand(_: Argument, _, _, _, _, _, _) => true
+        case Expand(_: Argument, _, _, _, _, _, _, _) => true
       },
       r1 * r1 / a.toDouble
     )

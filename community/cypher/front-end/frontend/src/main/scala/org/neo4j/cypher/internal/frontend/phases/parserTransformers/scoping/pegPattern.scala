@@ -284,13 +284,23 @@ object pegPattern {
           References.connect(boundVariables.toSeq, incoming.allSymbols)
         )
 
-      case RelationshipPattern(variableOpt, labelExpressionOpt, _, propertiesOpt, predicateOpt, _) =>
+      case RelationshipPattern(
+          variableOpt,
+          labelExpressionOpt,
+          _,
+          propertiesOpt,
+          predicateOpt,
+          _,
+          stackActionOpt
+        ) =>
         val predicateIncoming =
           variableOpt.map(v => incoming.amendedWithTopologicalConstant(v)).getOrElse(incoming)
         val labelExpressionScopeOpt =
           labelExpressionOpt.map(labelExpression => scopePredicate(labelExpression, predicateIncoming))
         val propertiesScopeOpt = propertiesOpt.map(expression => scopePredicate(expression, predicateIncoming))
         val predicateScopeOpt = predicateOpt.map(predicate => scopePredicate(predicate, predicateIncoming))
+        val stackActionScopeOpt =
+          stackActionOpt.flatMap(_.key).map(key => scopePredicate(key, predicateIncoming))
         val matchesIter = variableOpt.exists(v => forceFreshExceptIter.exists(_.name == v.name))
         val effectivelyForceFresh = forceFreshExceptIter.isDefined && !matchesIter
         val (boundVariables, newVariables) =
@@ -300,7 +310,8 @@ object pegPattern {
           if (variableOpt.isEmpty) Seq(Variable(c.anonVarGen.nextName)(patternAtom.position, isIsolated = false))
           else newVariables.toSeq
         val columns = variableOpt.toSeq
-        val children = Seq(labelExpressionScopeOpt, propertiesScopeOpt, predicateScopeOpt).flatten
+        val children =
+          Seq(labelExpressionScopeOpt, propertiesScopeOpt, predicateScopeOpt, stackActionScopeOpt).flatten
         val declared = Declarations(Seq.empty, newVariablesWithAnon)
         incoming.resultScope(
           TableResult(columns),
@@ -437,7 +448,7 @@ object pegPattern {
   private def collectVisibleVariablesOfPatternAtom(patternAtom: PatternAtom): Set[LogicalVariable] = {
     patternAtom match {
       case NodePattern(Some(variable), _, _, _)               => Set(variable)
-      case RelationshipPattern(Some(variable), _, _, _, _, _) => Set(variable)
+      case RelationshipPattern(Some(variable), _, _, _, _, _, _) => Set(variable)
       case quantifiedPath: QuantifiedPath                     => collectVisibleVariablesOfQuantifiedPath(quantifiedPath)
       case _                                                  => Set.empty
     }

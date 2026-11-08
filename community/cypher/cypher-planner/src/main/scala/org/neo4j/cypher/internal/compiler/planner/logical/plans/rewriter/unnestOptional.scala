@@ -51,7 +51,7 @@ case object unnestOptional extends Rewriter {
     case apply @ Apply(
         lhs,
         Optional(
-          e @ Expand(_: Argument, _, _, _, _, _, _),
+          e @ Expand(_: Argument, _, _, _, _, _, _, _),
           _
         )
       ) =>
@@ -60,7 +60,7 @@ case object unnestOptional extends Rewriter {
     case apply @ Apply(
         lhs,
         Optional(
-          Selection(predicate, e @ Expand(_: Argument, _, _, _, _, _, _)),
+          Selection(predicate, e @ Expand(_: Argument, _, _, _, _, _, _, _)),
           _
         )
       ) =>

@@ -405,7 +405,7 @@ object VariableCheckerUtil {
           scope match {
             case (
                 Acc.UpdatingContext(acc, allowedToShadow),
-                PatternScope(RelationshipPattern(Some(variable), _, _, _, _, _), _, referenced, _, _, _)
+                PatternScope(RelationshipPattern(Some(variable), _, _, _, _, _, _), _, referenced, _, _, _)
               )
               if referenced.getVariables.exists(_.name == variable.name) && !allowedToShadow(variable) =>
               Some((acc, variable.name, variable.position))

@@ -79,7 +79,11 @@ object ForAllRepetitions {
         .orElse(qpp.groupVariables.minOption(
           Ordering.by[LogicalVariable, String](_.name)
         )) // if the predicate doesn't use any QPP variables, just pick one
-        .getOrElse(qpp.left) // a QPP nested inside another one may expose no groupings of its own
+        .getOrElse(throw new IllegalStateException(
+          "Cannot lift a predicate of a quantified path pattern that exposes no group variables, " +
+            "since the predicate has to be applied once per repetition " +
+            s"(pattern: ${qpp.solvedString}, predicate: $predicate)."
+        ))
 
     val astVariableGroupings = qpp.variableGroupings.map { irGrouping =>
       expressions.VariableGrouping(

@@ -136,7 +136,13 @@ case class IDPQPPInnerPlanner(context: LogicalPlanningContext) extends QPPInnerP
     labelInfoOuter: LabelInfo
   ): LogicalPlan = {
     val argumentsIntroducedByExtractedPredicates = extractedPredicates.requiredSymbols
-    val additionalArguments = argumentsIntroducedByExtractedPredicates + getQPPStartNode(qpp, fromLeft)
+    // Stack action keys are evaluated on the inner row, so variables they refer to that are bound
+    // outside of the quantified path pattern have to be imported into the inner plan as well.
+    // The same holds for the selections of a nested quantified path pattern, which are not lifted into
+    // the enclosing query graph and may reference variables from the enclosing scope.
+    val additionalArguments = argumentsIntroducedByExtractedPredicates +
+      getQPPStartNode(qpp, fromLeft) ++ qpp.externalStackKeyDependencies ++
+      qpp.externalSelectionDependencies
     val additionalPredicates = extractedPredicates.predicates.map(_.extracted).flatMap(Ands.unwrap)
     val qg = qpp.asQueryGraph
       .addArgumentIds(additionalArguments)

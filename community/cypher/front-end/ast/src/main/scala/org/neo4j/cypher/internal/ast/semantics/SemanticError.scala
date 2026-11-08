@@ -1848,7 +1848,7 @@ object SemanticError {
     )
   }
 
-  def nestedQPP(position: InputPosition): SemanticError = {
+  def nestedQuantifiedPathInAcyclicPathPattern(position: InputPosition): SemanticError = {
     val gql = ErrorGqlStatusObjectImplementation.from(GqlStatusInfoCodes.STATUS_42001)
       .atPosition(position.offset, position.line, position.column)
       .withCause(ErrorGqlStatusObjectImplementation.from(GqlStatusInfoCodes.STATUS_42I12)
@@ -1858,7 +1858,23 @@ object SemanticError {
 
     SemanticError(
       gql,
-      "Quantified path patterns are not allowed to be nested.",
+      "Quantified path patterns are not allowed to be nested in an ACYCLIC path pattern.",
+      position
+    )
+  }
+
+  def nestedQuantifiedPathWithVariablesInSelectivePath(position: InputPosition): SemanticError = {
+    val gql = GqlHelper.getGql42001_51N26(
+      "Nested quantified path patterns with variables together with shortest/any path selection",
+      "nested quantified path patterns with variables together with shortest/any path selection",
+      position.offset,
+      position.line,
+      position.column
+    )
+    SemanticError(
+      gql,
+      "Nested quantified path patterns that bind variables or have a predicate are not supported " +
+        "together with shortest/any path selection.",
       position
     )
   }
@@ -2183,6 +2199,78 @@ object SemanticError {
     SemanticError(
       GqlHelper.getGql42001_42I32(description, position.offset, position.line, position.column),
       s"$entity pattern predicates are not allowed in $description, but only in a MATCH clause or inside a pattern comprehension",
+      position
+    )
+  }
+
+  def stackConstraintOutsideQuantifiedPath(position: InputPosition): SemanticError = {
+    val gql = GqlHelper.getGql42001_51N26(
+      "Stack constraints outside quantified path patterns",
+      "stack constraints outside quantified path patterns",
+      position.offset,
+      position.line,
+      position.column
+    )
+    SemanticError(
+      gql,
+      "Stack constraints are only supported inside quantified path patterns.",
+      position
+    )
+  }
+
+  def stackConstraintInNestedQuantifiedPath(position: InputPosition): SemanticError = {
+    val gql = GqlHelper.getGql42001_51N26(
+      "Stack constraints in nested quantified path patterns",
+      "stack constraints in nested quantified path patterns",
+      position.offset,
+      position.line,
+      position.column
+    )
+    SemanticError(gql, "Stack constraints inside nested quantified path patterns are not supported.", position)
+  }
+
+  def stackConstraintWithSelectivePath(position: InputPosition): SemanticError = {
+    val gql = GqlHelper.getGql42001_51N26(
+      "Stack constraints together with shortest/any path selection",
+      "stack constraints together with shortest/any path selection",
+      position.offset,
+      position.line,
+      position.column
+    )
+    SemanticError(
+      gql,
+      "Stack constraints are not supported together with shortest/any path selection.",
+      position
+    )
+  }
+
+  def balancedStackNeverPushed(stackName: String, position: InputPosition): SemanticError = {
+    val gql = GqlHelper.getGql42001_51N26(
+      "A BALANCED stack constraint on a stack that is never pushed",
+      "a BALANCED stack constraint on a stack that is never pushed",
+      position.offset,
+      position.line,
+      position.column
+    )
+    val stack = if (stackName.isEmpty) "The anonymous stack" else s"Stack `$stackName`"
+    SemanticError(
+      gql,
+      s"$stack is marked BALANCED but is never pushed in this quantified path pattern.",
+      position
+    )
+  }
+
+  def stackKeyWithSubquery(position: InputPosition): SemanticError = {
+    val gql = GqlHelper.getGql42001_51N26(
+      "Sub-queries in the key of a stack constraint",
+      "sub-queries in the key of a stack constraint",
+      position.offset,
+      position.line,
+      position.column
+    )
+    SemanticError(
+      gql,
+      "Pattern and sub-query expressions are not supported in the key of a stack constraint.",
       position
     )
   }

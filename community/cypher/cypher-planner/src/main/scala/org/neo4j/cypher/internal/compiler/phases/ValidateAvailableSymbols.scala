@@ -22,6 +22,7 @@ package org.neo4j.cypher.internal.compiler.phases
 import org.neo4j.cypher.internal.expressions.CachedProperty
 import org.neo4j.cypher.internal.expressions.LogicalVariable
 import org.neo4j.cypher.internal.expressions.ScopeExpression
+import org.neo4j.cypher.internal.expressions.StackAction
 import org.neo4j.cypher.internal.ir.CreatePattern
 import org.neo4j.cypher.internal.logical.plans.CommandLogicalPlan
 import org.neo4j.cypher.internal.logical.plans.Expand.VariablePredicate
@@ -117,6 +118,10 @@ case object ValidateAvailableSymbols extends LogicalPlanValidatingCondition[AnyR
           TraverseChildrenNewAccForSiblings[Set[LogicalVariable]](acc, _ -- expression.introducedVariables)
       case predicate: VariablePredicate => acc =>
           TraverseChildrenNewAccForSiblings[Set[LogicalVariable]](acc, _ - predicate.variable)
+      case _: StackAction => acc =>
+          // Stack action keys are evaluated by the enclosing Repeat on the produced inner row,
+          // so their variables are available and should not be counted as reads on the input.
+          SkipChildren(acc)
       case foreach: Foreach =>
         val createVariables = foreach.mutations.foldLeft(Set.empty[LogicalVariable]) {
           case (vars, CreatePattern(commands)) => vars ++ commands.map(_.variable)

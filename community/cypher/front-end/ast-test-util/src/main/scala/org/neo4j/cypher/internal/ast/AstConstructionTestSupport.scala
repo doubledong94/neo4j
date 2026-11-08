@@ -155,6 +155,7 @@ import org.neo4j.cypher.internal.expressions.SensitiveStringLiteral
 import org.neo4j.cypher.internal.expressions.SignedDecimalIntegerLiteral
 import org.neo4j.cypher.internal.expressions.SingleIterablePredicate
 import org.neo4j.cypher.internal.expressions.SingleRelationshipPathStep
+import org.neo4j.cypher.internal.expressions.StackAction
 import org.neo4j.cypher.internal.expressions.StarQuantifier
 import org.neo4j.cypher.internal.expressions.StartsWith
 import org.neo4j.cypher.internal.expressions.StringLiteral
@@ -1072,11 +1073,18 @@ trait AstConstructionTestSupport {
     predicates: Option[Expression] = None,
     direction: SemanticDirection = OUTGOING,
     namePos: InputPosition = pos,
-    position: InputPosition = pos
+    position: InputPosition = pos,
+    stackAction: Option[StackAction] = None
   ): RelationshipPattern =
-    RelationshipPattern(name.map(varFor(_, namePos)), labelExpression, length, properties, predicates, direction)(
-      position
-    )
+    RelationshipPattern(
+      name.map(varFor(_, namePos)),
+      labelExpression,
+      length,
+      properties,
+      predicates,
+      direction,
+      stackAction
+    )(position)
 
   def pathConcatenation(factors: PathFactor*): PathConcatenation = PathConcatenation(factors)(pos)
 

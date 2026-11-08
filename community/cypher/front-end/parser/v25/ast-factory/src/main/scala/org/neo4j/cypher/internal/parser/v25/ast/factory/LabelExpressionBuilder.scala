@@ -25,8 +25,12 @@ import org.neo4j.cypher.internal.expressions.LabelName
 import org.neo4j.cypher.internal.expressions.LabelOrRelTypeName
 import org.neo4j.cypher.internal.expressions.LogicalVariable
 import org.neo4j.cypher.internal.expressions.NodePattern
+import org.neo4j.cypher.internal.expressions.PopFromStack
+import org.neo4j.cypher.internal.expressions.PushOntoStack
 import org.neo4j.cypher.internal.expressions.RelTypeName
 import org.neo4j.cypher.internal.expressions.RelationshipPattern
+import org.neo4j.cypher.internal.expressions.StackAction
+import org.neo4j.cypher.internal.expressions.StackVariable
 import org.neo4j.cypher.internal.label_expressions.LabelExpression
 import org.neo4j.cypher.internal.label_expressions.LabelExpression.ColonConjunction
 import org.neo4j.cypher.internal.label_expressions.LabelExpression.ColonDisjunction
@@ -74,8 +78,20 @@ trait LabelExpressionBuilder extends Cypher25ParserListener {
       length = astOpt[Option[expressions.Range]](ctx.pathLength()),
       properties = astOpt[Expression](ctx.properties()),
       predicate = astOpt[Expression](ctx.expression()),
-      direction = semanticDirection(hasRightArrow = ctx.rightArrow() != null, hasLeftArrow = ctx.leftArrow() != null)
+      direction = semanticDirection(hasRightArrow = ctx.rightArrow() != null, hasLeftArrow = ctx.leftArrow() != null),
+      stackAction = astOpt[StackAction](ctx.stackAction())
     )(pos(ctx))
+  }
+
+  final override def exitStackAction(ctx: Cypher25Parser.StackActionContext): Unit = {
+    val stack = Option(ctx.symbolicNameString()).map(name => StackVariable(name.ast())(pos(name)))
+    val key = astOpt[Expression](ctx.expression())
+    val requiresBalance = ctx.BALANCED() != null
+    val signed = ctx.SIGNED() != null
+    val p = pos(ctx)
+    ctx.ast =
+      if (ctx.PUSH() != null) PushOntoStack(stack, key, requiresBalance, signed)(p)
+      else PopFromStack(stack, key, requiresBalance, signed)(p)
   }
 
   final override def exitNodeLabels(ctx: Cypher25Parser.NodeLabelsContext): Unit = {

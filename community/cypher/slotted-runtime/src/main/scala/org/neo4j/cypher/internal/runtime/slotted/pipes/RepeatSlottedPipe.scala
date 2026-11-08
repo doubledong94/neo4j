@@ -29,6 +29,7 @@ import org.neo4j.cypher.internal.physicalplanning.SlotConfigurationUtils.makeGet
 import org.neo4j.cypher.internal.runtime.CastSupport.castOrFail
 import org.neo4j.cypher.internal.runtime.ClosingIterator
 import org.neo4j.cypher.internal.runtime.CypherRow
+import org.neo4j.cypher.internal.runtime.NestedGroupValues
 import org.neo4j.cypher.internal.runtime.PrefetchingIterator
 import org.neo4j.cypher.internal.runtime.ReadableRow
 import org.neo4j.cypher.internal.runtime.RuntimeMetadataValue
@@ -38,6 +39,7 @@ import org.neo4j.cypher.internal.runtime.interpreted.pipes.Pipe
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.PipeWithSource
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.QueryState
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.RepeatPipe.emptyLists
+import org.neo4j.cypher.internal.runtime.interpreted.pipes.StackActionRuntime
 import org.neo4j.cypher.internal.runtime.slotted.SlottedRow
 import org.neo4j.cypher.internal.runtime.slotted.expressions.AcyclicState
 import org.neo4j.cypher.internal.runtime.slotted.expressions.TrailState
@@ -55,7 +57,6 @@ import org.neo4j.memory.MemoryTracker
 import org.neo4j.values.AnyValue
 import org.neo4j.values.virtual.ListValue
 import org.neo4j.values.virtual.VirtualNodeValue
-import org.neo4j.values.virtual.VirtualRelationshipValue
 import org.neo4j.values.virtual.VirtualValues
 
 import scala.annotation.tailrec
@@ -66,7 +67,15 @@ sealed trait SlottedRepeatState {
   val groupRelationships: HeapTrackingArrayList[ListValue]
   val iterations: Int
   val accumulators: Array[AnyValue]
-  def close(): Unit
+  val stacks: Map[String, StackActionRuntime.StackValue]
+
+  /** Heap allocated for [[stacks]] when this state was created, released again on close. */
+  val stacksHeapUsage: Long
+
+  protected def releaseStacks(tracker: MemoryTracker): Unit =
+    if (stacksHeapUsage != 0L) tracker.releaseHeap(stacksHeapUsage)
+
+  def close(tracker: MemoryTracker): Unit
 }
 
 case class SlottedAcyclicState(
@@ -78,17 +87,22 @@ case class SlottedAcyclicState(
   relationshipsSeen: HeapTrackingLongHashSet,
   iterations: Int,
   closeGroupsOnClose: Boolean,
-  accumulators: Array[AnyValue]
+  accumulators: Array[AnyValue],
+  stacks: Map[String, StackActionRuntime.StackValue],
+  stacksHeapUsage: Long = 0L
 ) extends AcyclicState with SlottedRepeatState with Measurable {
-  override def estimatedHeapUsage(): Long = SlottedAcyclicState.SHALLOW_SIZE
 
-  def close(): Unit = {
+  override def estimatedHeapUsage(): Long =
+    SlottedAcyclicState.SHALLOW_SIZE + StackActionRuntime.estimatedHeapUsage(stacks)
+
+  def close(tracker: MemoryTracker): Unit = {
     if (closeGroupsOnClose) {
       groupNodes.close()
       groupRelationships.close()
     }
     nodesSeen.close()
     relationshipsSeen.close()
+    releaseStacks(tracker)
   }
 }
 
@@ -104,16 +118,21 @@ case class SlottedTrailState(
   relationshipsSeen: HeapTrackingLongHashSet,
   iterations: Int,
   closeGroupsOnClose: Boolean,
-  accumulators: Array[AnyValue]
+  accumulators: Array[AnyValue],
+  stacks: Map[String, StackActionRuntime.StackValue],
+  stacksHeapUsage: Long = 0L
 ) extends TrailState with SlottedRepeatState with Measurable {
-  override def estimatedHeapUsage(): Long = SlottedTrailState.SHALLOW_SIZE
 
-  def close(): Unit = {
+  override def estimatedHeapUsage(): Long =
+    SlottedTrailState.SHALLOW_SIZE + StackActionRuntime.estimatedHeapUsage(stacks)
+
+  def close(tracker: MemoryTracker): Unit = {
     if (closeGroupsOnClose) {
       groupNodes.close()
       groupRelationships.close()
     }
     relationshipsSeen.close()
+    releaseStacks(tracker)
   }
 }
 
@@ -127,14 +146,17 @@ case class SlottedWalkState(
   groupRelationships: HeapTrackingArrayList[ListValue],
   iterations: Int,
   closeGroupsOnClose: Boolean,
-  accumulators: Array[AnyValue]
+  accumulators: Array[AnyValue],
+  stacks: Map[String, StackActionRuntime.StackValue],
+  stacksHeapUsage: Long = 0L
 ) extends SlottedRepeatState {
 
-  def close(): Unit = {
+  def close(tracker: MemoryTracker): Unit = {
     if (closeGroupsOnClose) {
       groupNodes.close()
       groupRelationships.close()
     }
+    releaseStacks(tracker)
   }
 }
 
@@ -154,7 +176,8 @@ case class RepeatSlottedPipe(
   argumentSize: SlotConfiguration.Size,
   reverseGroupVariableProjections: Boolean,
   nodeInScope: Boolean,
-  accumulatorMappings: Array[SlottedAllReduceAcc]
+  accumulatorMappings: Array[SlottedAllReduceAcc],
+  stackActions: Array[StackActionRuntime] = Array.empty
 )(val id: Id = Id.INVALID_ID) extends PipeWithSource(source) {
 
   private[this] val emptyGroupNodes = emptyLists(groupNodes.length)
@@ -189,10 +212,7 @@ case class RepeatSlottedPipe(
 
         val ig = previouslyBoundRelationshipGroups.iterator
         while (ig.hasNext) {
-          val i = castOrFail[ListValue](outerRowForReading.getRefAt(ig.next().offset)).iterator()
-          while (i.hasNext) {
-            relationshipsSeen.add(castOrFail[VirtualRelationshipValue](i.next()).id())
-          }
+          NestedGroupValues.foreachRelationshipId(outerRowForReading.getRefAt(ig.next().offset))(relationshipsSeen.add)
         }
 
         val nodesSeen = HeapTrackingCollections.newLongSet(tracker)
@@ -219,7 +239,8 @@ case class RepeatSlottedPipe(
           iterations = 1,
           // empty groups are reused for every argument, so can not be closed until the whole query finishes
           closeGroupsOnClose = false,
-          accumulators = initialAccumulatorValues
+          accumulators = initialAccumulatorValues,
+          stacks = Map.empty
         )
       case constraint @ RepeatSlottedPipe.TrailModeConstraint(
           _,
@@ -235,10 +256,7 @@ case class RepeatSlottedPipe(
 
         val ig = previouslyBoundRelationshipGroups.iterator
         while (ig.hasNext) {
-          val i = castOrFail[ListValue](outerRowForReading.getRefAt(ig.next().offset)).iterator()
-          while (i.hasNext) {
-            relationshipsSeen.add(castOrFail[VirtualRelationshipValue](i.next()).id())
-          }
+          NestedGroupValues.foreachRelationshipId(outerRowForReading.getRefAt(ig.next().offset))(relationshipsSeen.add)
         }
 
         SlottedTrailState(
@@ -250,7 +268,8 @@ case class RepeatSlottedPipe(
           iterations = 1,
           // empty groups are reused for every argument, so can not be closed until the whole query finishes
           closeGroupsOnClose = false,
-          accumulators = initialAccumulatorValues
+          accumulators = initialAccumulatorValues,
+          stacks = Map.empty
         )
 
       case WalkModeConstraint =>
@@ -261,16 +280,32 @@ case class RepeatSlottedPipe(
           iterations = 1,
           // empty groups are reused for every argument, so can not be closed until the whole query finishes
           closeGroupsOnClose = false,
-          accumulators = initialAccumulatorValues
+          accumulators = initialAccumulatorValues,
+          stacks = Map.empty
         )
     }
   }
+
+  /**
+   * A nested quantified path pattern exposes the relationships it matched through its group variable, which holds a
+   * list of the values bound by one repetition of the inner pattern. Since quantified path patterns may be nested
+   * arbitrarily deep, that value may in turn be a list of lists. Runs `f` for every relationship id, short-circuiting
+   * as soon as `f` returns false.
+   */
+  private def forEachInnerRelationshipId(row: ReadableRow, slot: Slot)(f: Long => Boolean): Boolean =
+    if (slot.isLongSlot) {
+      f(row.getLongAt(slot.offset))
+    } else {
+      NestedGroupValues.foreachRelationshipId(row.getRefAt(slot.offset))(f)
+    }
 
   private def createNextState(
     state: SlottedRepeatState,
     rowForReading: ReadableRow,
     innerEndNode: Long,
-    tracker: MemoryTracker
+    tracker: MemoryTracker,
+    newStacks: Map[String, StackActionRuntime.StackValue],
+    newStacksHeapUsage: Long
   ): SlottedRepeatState = {
     val accumulatorValues = new Array[AnyValue](accumulatorMappings.length)
     var i = 0
@@ -278,6 +313,11 @@ case class RepeatSlottedPipe(
       accumulatorValues(i) = rowForReading.getRefAt(nextAccumulatorSlotOffsets(i))
       i += 1
     }
+
+    // Only account for the memory the new state adds on top of its parent. The immutable stack lists
+    // share their tails, so a state must not be charged for the whole depth it references; the delta
+    // is accumulated incrementally by the stack actions.
+    tracker.allocateHeap(newStacksHeapUsage)
 
     state match {
       case acyclicState: SlottedAcyclicState =>
@@ -287,22 +327,10 @@ case class RepeatSlottedPipe(
         var i = 0
         while (i < acyclicState.constraint.innerRelationships.length) {
           val r = acyclicState.constraint.innerRelationships(i)
-          if (r.isLongSlot) {
-            if (!newRelationshipsSeen.add(rowForReading.getLongAt(r.offset))) {
-              throw new IllegalStateException(
-                "Method should only be called when all relationships are known to be unique"
-              )
-            }
-          } else {
-            // A nested quantified path pattern exposes a list of relationships through its group variable.
-            val relationships = castOrFail[ListValue](rowForReading.getRefAt(r.offset)).iterator()
-            while (relationships.hasNext) {
-              if (!newRelationshipsSeen.add(castOrFail[VirtualRelationshipValue](relationships.next()).id())) {
-                throw new IllegalStateException(
-                  "Method should only be called when all relationships are known to be unique"
-                )
-              }
-            }
+          if (!forEachInnerRelationshipId(rowForReading, r)(newRelationshipsSeen.add)) {
+            throw new IllegalStateException(
+              "Method should only be called when all relationships are known to be unique"
+            )
           }
           i += 1
         }
@@ -346,7 +374,9 @@ case class RepeatSlottedPipe(
           relationshipsSeen = newRelationshipsSeen,
           acyclicState.iterations + 1,
           closeGroupsOnClose = true,
-          accumulatorValues
+          accumulatorValues,
+          newStacks,
+          newStacksHeapUsage
         )
       case trailState: SlottedTrailState =>
         val newSet = HeapTrackingCollections.newLongSet(tracker, trailState.relationshipsSeen)
@@ -354,22 +384,10 @@ case class RepeatSlottedPipe(
         var i = 0
         while (i < trailState.constraint.innerRelationships.length) {
           val r = trailState.constraint.innerRelationships(i)
-          if (r.isLongSlot) {
-            if (!newSet.add(rowForReading.getLongAt(r.offset))) {
-              throw new IllegalStateException(
-                "Method should only be called when all relationships are known to be unique"
-              )
-            }
-          } else {
-            // A nested quantified path pattern exposes a list of relationships through its group variable.
-            val relationships = castOrFail[ListValue](rowForReading.getRefAt(r.offset)).iterator()
-            while (relationships.hasNext) {
-              if (!newSet.add(castOrFail[VirtualRelationshipValue](relationships.next()).id())) {
-                throw new IllegalStateException(
-                  "Method should only be called when all relationships are known to be unique"
-                )
-              }
-            }
+          if (!forEachInnerRelationshipId(rowForReading, r)(newSet.add)) {
+            throw new IllegalStateException(
+              "Method should only be called when all relationships are known to be unique"
+            )
           }
           i += 1
         }
@@ -387,7 +405,9 @@ case class RepeatSlottedPipe(
           newSet,
           trailState.iterations + 1,
           closeGroupsOnClose = true,
-          accumulatorValues
+          accumulatorValues,
+          newStacks,
+          newStacksHeapUsage
         )
 
       case walkState: SlottedWalkState =>
@@ -402,7 +422,9 @@ case class RepeatSlottedPipe(
           ),
           walkState.iterations + 1,
           closeGroupsOnClose = true,
-          accumulatorValues
+          accumulatorValues,
+          newStacks,
+          newStacksHeapUsage
         )
     }
   }
@@ -470,7 +492,11 @@ case class RepeatSlottedPipe(
 
           override protected[this] def closeMore(): Unit = {
             if (stackHead != null) {
-              stackHead.close()
+              stackHead.close(tracker)
+            }
+            // States still waiting on the stack were never popped, so close them here as well.
+            while (!stack.isEmpty) {
+              stack.pop().close(tracker)
             }
             innerResult.close()
             stack.close()
@@ -498,25 +524,44 @@ case class RepeatSlottedPipe(
             } else if (innerResult.hasNext) {
               val row = innerResult.next()
               val innerEndNode = row.getLongAt(innerEndSlot.offset)
-              if (repetition.max.isGreaterThan(stackHead.iterations)) {
-                stack.push(createNextState(stackHead, rowForReading = row, innerEndNode, tracker))
-              }
-              // if iterated long enough emit, otherwise recurse
-              if (stackHead.iterations >= repetition.min && testEndNode(row, innerEndNode)) {
-                newResultRow(
-                  row,
-                  stackHead.groupNodes,
-                  stackHead.groupRelationships,
-                  innerEndNode,
-                  stackHead.accumulators
-                )
-              } else {
+              val nextStacksOpt: Option[StackActionRuntime.Applied] =
+                if (stackActions.isEmpty) None else applyStackActions(stackHead.stacks, row, state)
+              if (nextStacksOpt.isEmpty && stackActions.nonEmpty) {
+                // A stack action pruned this repetition
                 produceNext()
+              } else {
+                val (nextStacks, nextStacksHeapUsage) = nextStacksOpt match {
+                  case Some(applied) => (applied.stacks, math.max(0L, applied.heapDelta))
+                  case None          => (stackHead.stacks, 0L)
+                }
+                if (repetition.max.isGreaterThan(stackHead.iterations)) {
+                  stack.push(createNextState(
+                    stackHead,
+                    rowForReading = row,
+                    innerEndNode,
+                    tracker,
+                    nextStacks,
+                    nextStacksHeapUsage
+                  ))
+                }
+                val balanced = StackActionRuntime.areRequiredStacksBalanced(stackActions, nextStacks)
+                // if iterated long enough emit, otherwise recurse
+                if (stackHead.iterations >= repetition.min && balanced && testEndNode(row, innerEndNode)) {
+                  newResultRow(
+                    row,
+                    stackHead.groupNodes,
+                    stackHead.groupRelationships,
+                    innerEndNode,
+                    stackHead.accumulators
+                  )
+                } else {
+                  produceNext()
+                }
               }
             } else if (!stack.isEmpty) {
               // close previous state
               if (stackHead != null) {
-                stackHead.close()
+                stackHead.close(tracker)
               }
               // Run RHS with previous end-node as new innerStartNode
               stackHead = stack.pop()
@@ -544,7 +589,7 @@ case class RepeatSlottedPipe(
               produceNext()
             } else {
               if (stackHead != null) {
-                stackHead.close()
+                stackHead.close(tracker)
                 stackHead = null
               }
               None
@@ -558,6 +603,13 @@ case class RepeatSlottedPipe(
   private def testEndNode(row: CypherRow, endNode: Long): Boolean = {
     !nodeInScope || getEndNodeFunction.applyAsLong(row) == endNode
   }
+
+  private def applyStackActions(
+    stacks: Map[String, StackActionRuntime.StackValue],
+    row: ReadableRow,
+    state: QueryState
+  ): Option[StackActionRuntime.Applied] =
+    StackActionRuntime.applyAll(stackActions, stacks, row, state)
 }
 
 object RepeatSlottedPipe {
@@ -585,6 +637,19 @@ object RepeatSlottedPipe {
 
   case object WalkModeConstraint extends TraversalModeConstraint
 
+  /**
+   * Read the value of a group slot in the inner row. For a plain entity this is the id in the long slot; for a
+   * nested quantified path pattern the slot is a reference to the nested group variable, which already is a list
+   * and is appended as-is, so that nested group variables become nested lists.
+   */
+  private def groupValue(row: ReadableRow, slot: Slot, isRelationship: Boolean): AnyValue =
+    if (slot.isLongSlot) {
+      val id = row.getLongAt(slot.offset)
+      if (isRelationship) VirtualValues.relationship(id) else VirtualValues.node(id)
+    } else {
+      row.getRefAt(slot.offset)
+    }
+
   def computeNodeGroupVariables(
     groupNodeSlots: Array[GroupSlot],
     groupVariables: HeapTrackingArrayList[ListValue],
@@ -594,7 +659,7 @@ object RepeatSlottedPipe {
     val res = HeapTrackingCollections.newArrayList[ListValue](groupVariables.size(), tracker)
     var i = 0
     while (i < groupNodeSlots.length) {
-      res.add(groupVariables.get(i).append(VirtualValues.node(row.getLongAt(groupNodeSlots(i).innerSlot.offset))))
+      res.add(groupVariables.get(i).append(groupValue(row, groupNodeSlots(i).innerSlot, isRelationship = false)))
       i += 1
     }
     res
@@ -609,9 +674,7 @@ object RepeatSlottedPipe {
     val res = HeapTrackingCollections.newArrayList[ListValue](groupVariables.size(), tracker)
     var i = 0
     while (i < groupRelSlots.length) {
-      res.add(groupVariables.get(i).append(
-        VirtualValues.relationship(row.getLongAt(groupRelSlots(i).innerSlot.offset))
-      ))
+      res.add(groupVariables.get(i).append(groupValue(row, groupRelSlots(i).innerSlot, isRelationship = true)))
       i += 1
     }
     res
@@ -630,7 +693,7 @@ object RepeatSlottedPipe {
   ): Unit = {
     var i = 0
     while (i < groupNodeSlots.length) {
-      val nodeGroup = groupNodes.get(i).append(VirtualValues.node(row.getLongAt(groupNodeSlots(i).innerSlot.offset)))
+      val nodeGroup = groupNodes.get(i).append(groupValue(row, groupNodeSlots(i).innerSlot, isRelationship = false))
       val projectedNodeGroup = if (reverseGroupVariableProjections) nodeGroup.reverse() else nodeGroup
       row.setRefAt(groupNodeSlots(i).outerSlot.offset, projectedNodeGroup)
       i += 1
@@ -638,9 +701,7 @@ object RepeatSlottedPipe {
 
     i = 0
     while (i < groupRelSlots.length) {
-      val relGroup = groupRels.get(i).append(
-        VirtualValues.relationship(row.getLongAt(groupRelSlots(i).innerSlot.offset))
-      )
+      val relGroup = groupRels.get(i).append(groupValue(row, groupRelSlots(i).innerSlot, isRelationship = true))
       val projectedRelGroup = if (reverseGroupVariableProjections) relGroup.reverse() else relGroup
       row.setRefAt(groupRelSlots(i).outerSlot.offset, projectedRelGroup)
       i += 1

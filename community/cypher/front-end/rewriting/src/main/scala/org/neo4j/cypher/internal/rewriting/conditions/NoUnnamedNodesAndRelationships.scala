@@ -30,7 +30,7 @@ case object NoUnnamedNodesAndRelationships extends StatementValidatingCondition 
     that.folder(cancellationChecker).treeFold(Seq.empty[String]) {
       // We do not name nodes in relationships in shortest path expression
       case _: ShortestPathExpression => acc => SkipChildren(acc)
-      case rel @ RelationshipPattern(None, _, _, _, _, _) => acc =>
+      case rel @ RelationshipPattern(None, _, _, _, _, _, _) => acc =>
           SkipChildren(acc :+ s"RelationshipPattern at ${rel.position} is unnamed")
       case node @ NodePattern(None, _, _, _) => acc =>
           SkipChildren(acc :+ s"NodePattern at ${node.position} is unnamed")

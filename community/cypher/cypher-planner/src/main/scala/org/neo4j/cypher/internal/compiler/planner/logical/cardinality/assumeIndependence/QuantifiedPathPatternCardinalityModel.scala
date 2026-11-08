@@ -155,7 +155,7 @@ trait QuantifiedPathPatternCardinalityModel extends NodeCardinalityModel with Pa
       partitionBoundarySolvedPredicates(quantifiedPathPattern, predicates, boundaryNodePredicates)
 
     lazy val extraRelTypeInfo = quantifiedPathPattern.allPatternRelationships.collect {
-      case PatternRelationship(rel, _, _, Seq(relType), _) => rel -> relType
+      case PatternRelationship(rel, _, _, Seq(relType), _, _) => rel -> relType
     }.toMap
 
     lazy val boundaryNodePredicatesSelectivity: Selectivity =
@@ -218,7 +218,11 @@ trait QuantifiedPathPatternCardinalityModel extends NodeCardinalityModel with Pa
           .updated(quantifiedPathPattern.rightBinding.inner, rightBindingInnerLabels)
       } pipe {
         case (iterationLabels, context) =>
-          getPatternRelationshipsCardinality(context, iterationLabels, quantifiedPathPattern.allPatternRelationships)
+          getPatternRelationshipsCardinality(
+            context,
+            iterationLabels,
+            quantifiedPathPattern.relationshipsPerRepetition
+          )
       }
     }
 
@@ -275,7 +279,7 @@ trait QuantifiedPathPatternCardinalityModel extends NodeCardinalityModel with Pa
               getPatternRelationshipsCardinality(
                 context,
                 singleIterationLabels,
-                quantifiedPathPattern.allPatternRelationships
+                quantifiedPathPattern.relationshipsPerRepetition
               )
             patternCardinality * uniquenessSelectivity * otherPredicatesSelectivity
 

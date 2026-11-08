@@ -22,8 +22,10 @@ package org.neo4j.cypher.internal.runtime.interpreted.commands.convert
 import org.neo4j.cypher.internal.CypherVersion
 import org.neo4j.cypher.internal.ast.AstConstructionTestSupport
 import org.neo4j.cypher.internal.expressions.MultiRelationshipPathStep
+import org.neo4j.cypher.internal.expressions.NestedRepeatPathGroup
 import org.neo4j.cypher.internal.expressions.NilPathStep
 import org.neo4j.cypher.internal.expressions.NodePathStep
+import org.neo4j.cypher.internal.expressions.NodeRelPair
 import org.neo4j.cypher.internal.expressions.PathExpression
 import org.neo4j.cypher.internal.expressions.RepeatPathStep
 import org.neo4j.cypher.internal.expressions.SemanticDirection
@@ -34,6 +36,8 @@ import org.neo4j.cypher.internal.runtime.QueryIndexRegistrator
 import org.neo4j.cypher.internal.runtime.SelectivityTrackerRegistrator
 import org.neo4j.cypher.internal.runtime.interpreted.InterpretedRuntimeTestSuite
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath
+import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.NestedRepeatProjection
+import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.RepeatEntityProjection
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.multiIncomingRelationshipWithKnownTargetProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.multiOutgoingRelationshipWithKnownTargetProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.nilProjector
@@ -211,7 +215,41 @@ class PathExpressionConversionTest extends InterpretedRuntimeTestSuite with AstC
     converters.toCommandProjectedPath(expr) should equal(
       ProjectedPath(singleNodeProjector(
         "a",
-        quantifiedPathProjector(List("n", "r", "m", "q"), "b", nilProjector)
+        quantifiedPathProjector(
+          List(RepeatEntityProjection("n", "r"), RepeatEntityProjection("m", "q")),
+          "b",
+          nilProjector
+        )
+      ))
+    )
+  }
+
+  test("p = (a) ((n)-[r]-(m) ((o)-[s]-(p)){2}){2} (b)") {
+    val expr = PathExpression(
+      NodePathStep(
+        varFor("a"),
+        RepeatPathStep(
+          List(
+            NodeRelPair(varFor("n"), varFor("r")),
+            NestedRepeatPathGroup(List(NodeRelPair(varFor("o"), varFor("s"))))
+          ),
+          varFor("b"),
+          NilPathStep()(pos)
+        )(pos)
+      )(pos)
+    )(pos)
+
+    converters.toCommandProjectedPath(expr) should equal(
+      ProjectedPath(singleNodeProjector(
+        "a",
+        quantifiedPathProjector(
+          List(
+            RepeatEntityProjection("n", "r"),
+            NestedRepeatProjection(List(RepeatEntityProjection("o", "s")))
+          ),
+          "b",
+          nilProjector
+        )
       ))
     )
   }
@@ -236,9 +274,9 @@ class PathExpressionConversionTest extends InterpretedRuntimeTestSuite with AstC
       ProjectedPath(singleNodeProjector(
         "a",
         quantifiedPathProjector(
-          List("n", "r", "m", "q"),
+          List(RepeatEntityProjection("n", "r"), RepeatEntityProjection("m", "q")),
           "x",
-          quantifiedPathProjector(List("b", "r2"), "k", nilProjector)
+          quantifiedPathProjector(List(RepeatEntityProjection("b", "r2")), "k", nilProjector)
         )
       ))
     )

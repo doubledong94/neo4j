@@ -1182,7 +1182,7 @@ class ABCDECardinalityDataCardinalityIntegrationTest extends CypherPlannerTestSu
     planShouldHaveCardinality(
       query,
       {
-        case Expand(_, LogicalVariable("a"), _, _, _, _, _) => true
+        case Expand(_, LogicalVariable("a"), _, _, _, _, _, _) => true
       },
       A_T1_ANY
     )

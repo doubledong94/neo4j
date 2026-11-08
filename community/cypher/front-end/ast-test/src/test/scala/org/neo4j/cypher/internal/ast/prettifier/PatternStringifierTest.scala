@@ -17,9 +17,12 @@
 package org.neo4j.cypher.internal.ast.prettifier
 
 import org.neo4j.cypher.internal.ast.AstConstructionTestSupport
+import org.neo4j.cypher.internal.expressions.PopFromStack
+import org.neo4j.cypher.internal.expressions.PushOntoStack
 import org.neo4j.cypher.internal.expressions.SemanticDirection.BOTH
 import org.neo4j.cypher.internal.expressions.SemanticDirection.INCOMING
 import org.neo4j.cypher.internal.expressions.SemanticDirection.OUTGOING
+import org.neo4j.cypher.internal.expressions.StackVariable
 import org.neo4j.cypher.internal.util.test_helpers.CypherFunSuite
 import org.neo4j.cypher.internal.util.test_helpers.TestName
 
@@ -260,6 +263,49 @@ class PatternStringifierTest extends CypherFunSuite with TestName with AstConstr
     val pattern = relPat(
       predicates = Some(falseLiteral),
       direction = BOTH
+    )
+
+    patternStringifier(pattern) shouldEqual testName
+  }
+
+  test("-[c:CALL STACK PUSH BALANCED call: c.site]->") {
+    val pattern = relPat(
+      name = Some("c"),
+      labelExpression = Some(labelRelTypeLeaf("CALL")),
+      stackAction = Some(PushOntoStack(
+        stack = Some(StackVariable("call")(pos)),
+        key = Some(prop("c", "site")),
+        requiresBalance = true
+      )(pos)),
+      direction = OUTGOING
+    )
+
+    patternStringifier(pattern) shouldEqual testName
+  }
+
+  test("-[c:CALL STACK SIGNED POP BALANCED call: c.site]->") {
+    val pattern = relPat(
+      name = Some("c"),
+      labelExpression = Some(labelRelTypeLeaf("CALL")),
+      stackAction = Some(PopFromStack(
+        stack = Some(StackVariable("call")(pos)),
+        key = Some(prop("c", "site")),
+        requiresBalance = true,
+        signed = true
+      )(pos)),
+      direction = OUTGOING
+    )
+
+    patternStringifier(pattern) shouldEqual testName
+  }
+
+  test("-[STACK POP UNBALANCED c.site]->") {
+    val pattern = relPat(
+      stackAction = Some(PopFromStack(
+        stack = None,
+        key = Some(prop("c", "site"))
+      )(pos)),
+      direction = OUTGOING
     )
 
     patternStringifier(pattern) shouldEqual testName

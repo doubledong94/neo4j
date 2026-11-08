@@ -32,8 +32,6 @@ import org.neo4j.values.storable.Values.NO_VALUE
 import org.neo4j.values.virtual.ListValue
 import org.neo4j.values.virtual.VirtualValues
 
-import scala.jdk.CollectionConverters.IterableHasAsScala
-
 object ProjectedPath {
 
   type Projector = (ReadableRow, PathValueBuilder) => PathValueBuilder
@@ -235,38 +233,110 @@ object ProjectedPath {
     }
   }
 
-  case class quantifiedPathProjector(variables: Seq[String], toNode: String, tailProjector: Projector)
+  /**
+   * One level of group variables of a quantified path pattern in a projected path. A nested quantified path
+   * pattern is represented at the level below, which is why this is a tree: a path may mix relationships contained
+   * directly in a quantified path pattern with nested ones, and the two have a different nesting depth.
+   */
+  sealed trait RepeatGroupProjection
+  case class RepeatEntityProjection(node: String, relationship: String) extends RepeatGroupProjection
+  case class NestedRepeatProjection(groups: Seq[RepeatGroupProjection]) extends RepeatGroupProjection
+
+  case class quantifiedPathProjector(groups: Seq[RepeatGroupProjection], toNode: String, tailProjector: Projector)
       extends Projector {
 
     def apply(ctx: ReadableRow, builder: PathValueBuilder): PathValueBuilder = {
-      val listValues = variables.map(ctx.getByName(_) match {
-        case value: ListValue   => value
-        case x if x eq NO_VALUE => VirtualValues.EMPTY_LIST
-        case value: Value =>
-          throw CypherTypeException.expectedListValue(
-            String.valueOf(value),
-            value.prettyPrint(),
-            CypherTypeValueMapper.valueType(value)
-          )
-        case other =>
-          throw CypherTypeException.expectedListValue(
-            String.valueOf(other),
-            String.valueOf(other),
-            CypherTypeValueMapper.valueType(other)
-          )
-      }).map(_.asScala).transpose.flatten
-
-      if (listValues.nonEmpty) {
-        // Skip first element via `.tail`, since that is equal to the node added in the last Projector
-        for ((entity, position) <- listValues.tail.zipWithIndex) {
-          if (position % 2 == 0) {
-            // Relationship
-            builder.addRelationship(entity)
-          } else {
-            // Node
-            builder.addNode(entity)
-          }
+      def topLevelValue(name: String): ListValue =
+        ctx.getByName(name) match {
+          case value: ListValue   => value
+          case x if x eq NO_VALUE => VirtualValues.EMPTY_LIST
+          case value: Value =>
+            throw CypherTypeException.expectedListValue(
+              String.valueOf(value),
+              value.prettyPrint(),
+              CypherTypeValueMapper.valueType(value)
+            )
+          case other =>
+            throw CypherTypeException.expectedListValue(
+              String.valueOf(other),
+              String.valueOf(other),
+              CypherTypeValueMapper.valueType(other)
+            )
         }
+
+      val values = scala.collection.mutable.Map.empty[String, ListValue]
+      def valueAt(name: String, path: Seq[Int]): AnyValue = {
+        val root = values.getOrElseUpdate(name, topLevelValue(name))
+        var value: AnyValue = root
+        var level = 0
+        while (level < path.length) {
+          value = value match {
+            case list: ListValue => list.value(path(level))
+            case x if x eq NO_VALUE => VirtualValues.EMPTY_LIST
+            case other =>
+              throw CypherTypeException.expectedListValue(
+                String.valueOf(other),
+                String.valueOf(other),
+                CypherTypeValueMapper.valueType(other)
+              )
+          }
+          level += 1
+        }
+        value
+      }
+
+      def sizeAt(name: String, path: Seq[Int]): Long =
+        valueAt(name, path) match {
+          case list: ListValue => list.actualSize()
+          case _               => 0L
+        }
+
+      def repetitionCount(group: RepeatGroupProjection, path: Seq[Int]): Long =
+        group match {
+          case RepeatEntityProjection(node, _) => sizeAt(node, path)
+          case NestedRepeatProjection(groups)  => groups.headOption.map(repetitionCount(_, path)).getOrElse(0L)
+        }
+
+      var skippedFirstNode = false
+      var addedAnything = false
+
+      /**
+       * Emits the entities of one repetition level of a quantified path pattern. Every group variable of that
+       * level holds one entry per repetition of that level, so all of them are indexed with the same offsets.
+       * A nested quantified path pattern is expanded at the position where it occurs in the path.
+       */
+      def addRepetitions(groups: Seq[RepeatGroupProjection], path: Seq[Int]): Unit = {
+        val repetitions = groups.headOption.map(repetitionCount(_, path)).getOrElse(0L)
+        var repetition = 0L
+        while (repetition < repetitions) {
+          addGroups(groups, path :+ repetition.toInt)
+          repetition += 1
+        }
+      }
+
+      def addGroups(groups: Seq[RepeatGroupProjection], path: Seq[Int]): Unit = {
+        var i = 0
+        while (i < groups.size) {
+          groups(i) match {
+            case RepeatEntityProjection(node, relationship) =>
+              // The very first node is equal to the node added by the previous projector.
+              if (skippedFirstNode) {
+                builder.addNode(valueAt(node, path))
+                addedAnything = true
+              } else {
+                skippedFirstNode = true
+              }
+              builder.addRelationship(valueAt(relationship, path))
+              addedAnything = true
+            case nested: NestedRepeatProjection =>
+              addRepetitions(nested.groups, path)
+          }
+          i += 1
+        }
+      }
+
+      addRepetitions(groups, Seq.empty)
+      if (addedAnything) {
         builder.addNode(ctx.getByName(toNode))
       }
       tailProjector(ctx, builder)

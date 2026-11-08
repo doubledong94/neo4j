@@ -115,6 +115,114 @@ class NodeConnectionTest extends CypherFunSuite with AstConstructionTestSupport 
       .pathVariables should equal(Seq(NodePathVariable(v"start"), NodePathVariable(v"end")))
   }
 
+  test("pathVariables of a nested QPP") {
+    // (start) (((x)-[r]->(y)){2}){2} (end)
+    // f1 and f2 are the filler nodes that connect the nested QPP to the enclosing one.
+    val nested = QuantifiedPathPattern(
+      leftBinding = NodeBinding(v"x", v"f1"),
+      rightBinding = NodeBinding(v"y", v"f2"),
+      patternRelationships = NonEmptyList(
+        PatternRelationship(
+          variable = v"r",
+          boundaryNodes = (v"x", v"y"),
+          dir = SemanticDirection.OUTGOING,
+          types = Nil,
+          length = SimplePatternLength
+        )
+      ),
+      repetition = Repetition(2, UpperBound.Limited(2)),
+      nodeVariableGroupings = Set("x", "y").map(name => variableGrouping(varFor(name), varFor(name))),
+      relationshipVariableGroupings = Set(variableGrouping(v"r", v"r"))
+    )
+
+    val outer = QuantifiedPathPattern(
+      leftBinding = NodeBinding(v"f1", v"start"),
+      rightBinding = NodeBinding(v"f2", v"end"),
+      patternRelationships = NonEmptyList(nested),
+      repetition = Repetition(2, UpperBound.Limited(2)),
+      nodeVariableGroupings = Set("x", "y", "f1", "f2").map(name => variableGrouping(varFor(name), varFor(name))),
+      relationshipVariableGroupings = Set(variableGrouping(v"r", v"r"))
+    )
+
+    outer.pathVariables should equal(Seq(
+      NodePathVariable(v"start"),
+      NodePathVariable(v"x"),
+      RelationshipPathVariable(v"r"),
+      NodePathVariable(v"y"),
+      NodePathVariable(v"f2"),
+      NodePathVariable(v"end")
+    ))
+
+    outer.allPatternRelationships should equal(Seq(nested.patternRelationships.head))
+
+    // One repetition of `outer` traverses `nested` twice, and every repetition of `nested` traverses one
+    // relationship, so a nested repetition must not be counted as a single relationship.
+    outer.minRelationshipsPerRepetition should equal(2L)
+    outer.maxRelationshipsPerRepetition should equal(Some(2L))
+    outer.relationshipsPerRepetition should equal(Seq(
+      nested.patternRelationships.head,
+      nested.patternRelationships.head
+    ))
+  }
+
+  test("relationship bounds of a QPP with an unbounded nested QPP") {
+    val nested = QuantifiedPathPattern(
+      leftBinding = NodeBinding(v"x", v"f1"),
+      rightBinding = NodeBinding(v"y", v"f2"),
+      patternRelationships = NonEmptyList(
+        PatternRelationship(v"r", (v"x", v"y"), SemanticDirection.OUTGOING, Nil, SimplePatternLength)
+      ),
+      repetition = Repetition(0, UpperBound.Unlimited),
+      nodeVariableGroupings = Set("x", "y").map(name => variableGrouping(varFor(name), varFor(name))),
+      relationshipVariableGroupings = Set(variableGrouping(v"r", v"r"))
+    )
+
+    val outer = QuantifiedPathPattern(
+      leftBinding = NodeBinding(v"f1", v"start"),
+      rightBinding = NodeBinding(v"f2", v"end"),
+      patternRelationships = NonEmptyList(nested),
+      repetition = Repetition(1, UpperBound.Limited(3)),
+      nodeVariableGroupings = Set("x", "y", "f1", "f2").map(name => variableGrouping(varFor(name), varFor(name))),
+      relationshipVariableGroupings = Set(variableGrouping(v"r", v"r"))
+    )
+
+    outer.minRelationshipsPerRepetition should equal(0L)
+    outer.maxRelationshipsPerRepetition should equal(None)
+    // For cardinality estimation the nested pattern is assumed to be traversed at least once.
+    outer.relationshipsPerRepetition should equal(Seq(nested.patternRelationships.head))
+  }
+
+  test("relationshipsPerRepetition is capped in total for deeply nested QPPs") {
+    def nestedQuantifier(depth: Int): QuantifiedPathPattern = {
+      val relationship = PatternRelationship(v"r", (v"x", v"y"), SemanticDirection.OUTGOING, Nil, SimplePatternLength)
+      var qpp = QuantifiedPathPattern(
+        leftBinding = NodeBinding(v"x", v"x"),
+        rightBinding = NodeBinding(v"y", v"y"),
+        patternRelationships = NonEmptyList(relationship),
+        repetition = Repetition(32, UpperBound.Limited(32)),
+        nodeVariableGroupings = Set.empty,
+        relationshipVariableGroupings = Set.empty
+      )
+      (1 until depth).foreach { _ =>
+        qpp = QuantifiedPathPattern(
+          leftBinding = NodeBinding(qpp.left, qpp.left),
+          rightBinding = NodeBinding(qpp.right, qpp.right),
+          patternRelationships = NonEmptyList(qpp),
+          repetition = Repetition(32, UpperBound.Limited(32)),
+          nodeVariableGroupings = Set.empty,
+          relationshipVariableGroupings = Set.empty
+        )
+      }
+      qpp
+    }
+
+    nestedQuantifier(1).relationshipsPerRepetition should have size 1
+    nestedQuantifier(2).relationshipsPerRepetition should have size 32
+    // A per-level cap would produce 32^5 relationships here.
+    nestedQuantifier(6).relationshipsPerRepetition should have size
+      QuantifiedPathPattern.MaxNestedRepetitionExpansion.toInt
+  }
+
   test("pathVariables of an SPP") {
     val spp =
       SelectivePathPattern(

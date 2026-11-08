@@ -45,6 +45,7 @@ import org.neo4j.cypher.internal.expressions.ParenthesizedPath
 import org.neo4j.cypher.internal.expressions.PathConcatenation
 import org.neo4j.cypher.internal.expressions.PathFactor
 import org.neo4j.cypher.internal.expressions.PathLengthQuantifier
+import org.neo4j.cypher.internal.expressions.PathMode
 import org.neo4j.cypher.internal.expressions.PathPatternPart
 import org.neo4j.cypher.internal.expressions.Pattern
 import org.neo4j.cypher.internal.expressions.Pattern.SemanticContext
@@ -58,6 +59,7 @@ import org.neo4j.cypher.internal.expressions.PatternPart.ShortestGroups
 import org.neo4j.cypher.internal.expressions.PrefixedPatternPart
 import org.neo4j.cypher.internal.expressions.Property
 import org.neo4j.cypher.internal.expressions.PropertyKeyName
+import org.neo4j.cypher.internal.expressions.PushOntoStack
 import org.neo4j.cypher.internal.expressions.QuantifiedPath
 import org.neo4j.cypher.internal.expressions.RELATIONSHIP_TYPE
 import org.neo4j.cypher.internal.expressions.Range
@@ -67,6 +69,8 @@ import org.neo4j.cypher.internal.expressions.RelationshipPattern
 import org.neo4j.cypher.internal.expressions.RelationshipsPattern
 import org.neo4j.cypher.internal.expressions.SemanticDirection
 import org.neo4j.cypher.internal.expressions.ShortestPathsPatternPart
+import org.neo4j.cypher.internal.expressions.StackAction
+import org.neo4j.cypher.internal.expressions.StackVariable
 import org.neo4j.cypher.internal.expressions.StringLiteral
 import org.neo4j.cypher.internal.expressions.SubqueryExpression
 import org.neo4j.cypher.internal.label_expressions.LabelExpression
@@ -80,6 +84,8 @@ import org.neo4j.cypher.internal.notification.UnsatisfiableRelationshipTypeExpre
 import org.neo4j.cypher.internal.util.ASTNode
 import org.neo4j.cypher.internal.util.AnonymousVariableNameGenerator
 import org.neo4j.cypher.internal.util.Foldable.SkipChildren
+import org.neo4j.cypher.internal.util.Foldable.TraverseChildren
+import org.neo4j.cypher.internal.util.Foldable.TraverseChildrenNewAccForSiblings
 import org.neo4j.cypher.internal.util.InputPosition
 import org.neo4j.cypher.internal.util.Rewriter
 import org.neo4j.cypher.internal.util.SymbolicName
@@ -100,13 +106,216 @@ object SemanticPatternCheck extends SemanticAnalysisTooling {
     check(ctx, pattern, MatchMode.default())
 
   def check(ctx: SemanticContext, pattern: Pattern, matchMode: MatchMode): SemanticCheck =
-    declareVariablesInSeparateScope(ctx, pattern.patternParts) chain
+    checkStackConstraintsOnlyInQuantifiedPaths(pattern) chain
+      checkStackConstraintsNotInNestedQuantifiedPaths(pattern) chain
+      checkStackConstraintsNotWithSelectivePathParts(pattern) chain
+      checkNestedQuantifiedPathsInSelectivePathPatterns(pattern) chain
+      checkBalancedStacksArePushed(pattern) chain
+      declareVariablesInSeparateScope(ctx, pattern.patternParts) chain
       semanticCheckFold(pattern.patternParts)(check(ctx)) ifOkChain
       semanticCheckFold(pattern.patternParts)(checkMinimumNodeCount) ifOkChain
       when(ctx != SemanticContext.Create && ctx != SemanticContext.Insert) {
         ensureNoOutOfScopePathReferences(pattern) chain
           ensureDifferentRelationships(pattern, matchMode)
       }
+
+  /**
+   * Stack constraints may only be used on relationships inside a quantified path pattern, where the
+   * push/pop actions are applied once per repetition.
+   */
+  private def checkStackConstraintsOnlyInQuantifiedPaths(node: ASTNode): SemanticCheck =
+    node.folder.treeFold(SemanticCheck.success) {
+      case _: QuantifiedPath => acc => SkipChildren(acc)
+      // Stack constraints in a shortest/any path are reported with a more precise message by
+      // checkStackConstraintsNotWithSelectivePathParts (selective paths) and
+      // check(SemanticContext)(PatternPart) (legacy shortestPath/allShortestPaths).
+      case part: PrefixedPatternPart if part.isSelective => acc => SkipChildren(acc)
+      case _: ShortestPathsPatternPart                   => acc => SkipChildren(acc)
+      // A subquery has its own scope and is checked as a pattern of its own.
+      case _: SubqueryExpression => acc => SkipChildren(acc)
+      case relationship: RelationshipPattern if relationship.stackAction.isDefined =>
+        acc =>
+          SkipChildren(acc chain error(SemanticError.stackConstraintOutsideQuantifiedPath(relationship.position)))
+    }
+
+  /**
+   * Stack constraints inside a quantified path pattern that is itself nested inside another quantified
+   * path pattern are not supported.
+   */
+  private def checkStackConstraintsNotInNestedQuantifiedPaths(node: ASTNode): SemanticCheck = {
+    val nestedQuantifiedPaths: Seq[QuantifiedPath] =
+      node.folder.treeFold(Seq.empty[QuantifiedPath]) {
+        case _: SubqueryExpression => acc => SkipChildren(acc)
+        case qpp: QuantifiedPath   =>
+          // Do not descend here, since qpp.part already contains all (transitively) nested QPPs.
+          acc => SkipChildren(acc ++ quantifiedPathsIn(qpp.part))
+      }
+
+    // Collect distinct relationships so that a relationship nested several levels deep is only
+    // reported once.
+    val stackConstrainedRelationships: Seq[RelationshipPattern] =
+      nestedQuantifiedPaths
+        .flatMap(qpp => stackConstrainedRelationshipsIn(qpp.part))
+        .distinct
+
+    stackConstrainedRelationships.foldSemanticCheck { relationship =>
+      error(SemanticError.stackConstraintInNestedQuantifiedPath(relationship.position))
+    }
+  }
+
+  /**
+   * All quantified path patterns in `node`, including nested ones, but not descending into
+   * subqueries, which have their own independent scope.
+   */
+  private def quantifiedPathsIn(node: ASTNode): Seq[QuantifiedPath] =
+    node.folder.treeFold(Seq.empty[QuantifiedPath]) {
+      case _: SubqueryExpression => acc => SkipChildren(acc)
+      case qpp: QuantifiedPath   => acc => TraverseChildren(acc :+ qpp)
+    }
+
+  private def stackConstrainedRelationshipsIn(node: ASTNode): Seq[RelationshipPattern] =
+    node.folder.treeFold(Seq.empty[RelationshipPattern]) {
+      case _: SubqueryExpression => acc => SkipChildren(acc)
+      case relationship: RelationshipPattern if relationship.stackAction.isDefined =>
+        acc => SkipChildren(acc :+ relationship)
+    }
+
+  /**
+   * Stack constraints are not supported together with the shortest/any path selection machinery.
+   * Legacy `shortestPath(..)` / `allShortestPaths(..)` are nested in a non-selective
+   * [[PrefixedPatternPart]] and are therefore checked in `check(SemanticContext)(PatternPart)`.
+   */
+  private def checkStackConstraintsNotWithSelectivePathParts(pattern: Pattern): SemanticCheck =
+    pattern.patternParts.foldSemanticCheck(checkStackConstraintsNotWithSelectivePathPart)
+
+  private def checkStackConstraintsNotWithSelectivePathPart(part: PatternPart): SemanticCheck =
+    part match {
+      case prefixed: PrefixedPatternPart if prefixed.selector.isSelective =>
+        checkNoStackConstraintsInElement(prefixed.element)
+      case shortest: ShortestPathsPatternPart =>
+        checkNoStackConstraintsInElement(shortest.element)
+      case named: NamedPatternPart =>
+        checkStackConstraintsNotWithSelectivePathPart(named.patternPart)
+      case _ => SemanticCheck.success
+    }
+
+  /**
+   * Nested quantified path patterns that bind variables (or carry a predicate) are not supported together
+   * with the shortest/any path selection machinery. The selective path pattern runtime unrolls the nested
+   * pattern into its NFA, which only materializes one flat list per group variable and cannot provide the
+   * list-of-lists that a nested quantified path pattern exposes. Predicates of nested quantified path
+   * patterns cannot be applied per nested repetition either.
+   */
+  private def checkNestedQuantifiedPathsInSelectivePathPatterns(pattern: Pattern): SemanticCheck =
+    pattern.patternParts.foldSemanticCheck(checkNestedQuantifiedPathsInSelectivePathPart)
+
+  private def checkNestedQuantifiedPathsInSelectivePathPart(part: PatternPart): SemanticCheck =
+    part match {
+      case prefixed: PrefixedPatternPart if prefixed.selector.isSelective =>
+        nestedQuantifiedPathsWithVariablesOrPredicate(prefixed.element).foldSemanticCheck { qpp =>
+          error(SemanticError.nestedQuantifiedPathWithVariablesInSelectivePath(qpp.position))
+        }
+      case named: NamedPatternPart => checkNestedQuantifiedPathsInSelectivePathPart(named.patternPart)
+      case _                       => SemanticCheck.success
+    }
+
+  /**
+   * Quantified path patterns nested inside another quantified path pattern that bind variables or have a
+   * predicate, in the order in which they appear in the pattern.
+   */
+  private def nestedQuantifiedPathsWithVariablesOrPredicate(node: ASTNode): Seq[QuantifiedPath] =
+    node.folder
+      .treeFold((false, Seq.empty[QuantifiedPath])) {
+        // A subquery has its own scope and is checked as a pattern of its own.
+        case _: SubqueryExpression => acc => SkipChildren(acc)
+        case qpp: QuantifiedPath =>
+          acc => {
+            val (insideQuantifiedPath, found) = acc
+            val newFound =
+              if (insideQuantifiedPath && bindsVariablesOrHasPredicate(qpp)) found :+ qpp else found
+            // Descend into the quantified path pattern with the knowledge that everything below is nested,
+            // and restore the state of the enclosing pattern again for the following siblings.
+            TraverseChildrenNewAccForSiblings((true, newFound), { case (_, f) => (insideQuantifiedPath, f) })
+          }
+      }
+      ._2
+
+  private def bindsVariablesOrHasPredicate(qpp: QuantifiedPath): Boolean =
+    qpp.optionalWhereExpression.isDefined ||
+      qpp.part.folder.treeExists {
+        case node: NodePattern => node.variable.exists(v => AnonymousVariableNameGenerator.isNamed(v.name))
+        case relationship: RelationshipPattern =>
+          relationship.variable.exists(v => AnonymousVariableNameGenerator.isNamed(v.name))
+        // A predicate may still be attached to a parenthesized path inside the quantified path pattern.
+        // UnwrapParenthesizedPath moves it to the enclosing quantified path pattern only outside of
+        // selective path patterns, which is after semantic analysis has run.
+        case ParenthesizedPath(_, Some(_)) => true
+      }
+
+  /**
+   * A stack key is evaluated once per repetition on the inner row, and the variables of a quantified
+   * path pattern are renamed per iteration. Sub-queries in the key would reference the enclosing
+   * (group) variables inside their own plan and cannot be re-bound by the repetition, so they are
+   * not supported.
+   */
+  private def checkNoSubqueryInStackKey(key: Expression): SemanticCheck =
+    key.folder.treeFold(SemanticCheck.success) {
+      case subquery: SubqueryExpression => acc =>
+          SkipChildren(acc chain error(SemanticError.stackKeyWithSubquery(subquery.position)))
+    }
+
+  private def checkNoStackConstraintsInElement(element: PatternElement): SemanticCheck =
+    element.folder.treeFold(SemanticCheck.success) {
+      case _: SubqueryExpression => acc => SkipChildren(acc)
+      case relationship: RelationshipPattern if relationship.stackAction.isDefined =>
+        acc =>
+          SkipChildren(acc chain error(SemanticError.stackConstraintWithSelectivePath(relationship.position)))
+    }
+
+  /**
+   * A stack marked BALANCED must be pushed somewhere in the same quantified path pattern, otherwise
+   * requiring it to be empty can never have an effect.
+   */
+  private def checkBalancedStacksArePushed(node: ASTNode): SemanticCheck =
+    node.folder.treeFold(SemanticCheck.success) {
+      case _: SubqueryExpression => acc => SkipChildren(acc)
+      case qpp: QuantifiedPath   =>
+        // A quantified path pattern that can be repeated zero times can still emit its
+        // zero-repetition match with an empty stack, so a missing push is not an error there.
+        val check =
+          if (quantifierCanBeEmpty(qpp.quantifier)) SemanticCheck.success
+          else {
+            val actions = stackActionsIn(qpp)
+            val pushedStacks = actions.collect { case PushOntoStack(stack, _, _, _) => stackName(stack) }.toSet
+            actions
+              .filter(action => action.requiresBalance && !pushedStacks.contains(stackName(action.stack)))
+              .foldSemanticCheck { action =>
+                error(SemanticError.balancedStackNeverPushed(stackName(action.stack), action.position))
+              }
+          }
+        acc => SkipChildren(acc chain check)
+    }
+
+  /**
+   * Like [[GraphPatternQuantifier.canBeEmpty]], but tolerates quantifier literals that are too large to be
+   * represented as a long. Those are reported by a dedicated semantic check and must not throw here.
+   */
+  private def quantifierCanBeEmpty(quantifier: GraphPatternQuantifier): Boolean =
+    try {
+      quantifier.canBeEmpty
+    } catch {
+      case _: NumberFormatException => false
+    }
+
+  private def stackActionsIn(qpp: QuantifiedPath): Seq[StackAction] =
+    qpp.part.folder.treeFold(Seq.empty[StackAction]) {
+      case _: SubqueryExpression => acc => SkipChildren(acc)
+      case _: QuantifiedPath     => acc => SkipChildren(acc)
+      case relationship: RelationshipPattern if relationship.stackAction.isDefined =>
+        acc => SkipChildren(acc :+ relationship.stackAction.get)
+    }
+
+  private def stackName(stack: Option[StackVariable]): String = stack.map(_.name).getOrElse("")
 
   private def declareVariablesInSeparateScope(ctx: SemanticContext, parts: Seq[PatternPart]): SemanticCheck = {
     when(parts.folder.findAllByClass[FullSubqueryExpression].nonEmpty) {
@@ -138,7 +347,10 @@ object SemanticPatternCheck extends SemanticAnalysisTooling {
     matchMode: MatchMode
   ): SemanticCheck = {
     val checkPipeline =
-      declareVariables(ctx, pattern.element) chain
+      checkStackConstraintsOnlyInQuantifiedPaths(pattern) chain
+        checkStackConstraintsNotInNestedQuantifiedPaths(pattern) chain
+        checkBalancedStacksArePushed(pattern) chain
+        declareVariables(ctx, pattern.element) chain
         check(ctx, pattern.element)
 
     matchMode match {
@@ -195,7 +407,8 @@ object SemanticPatternCheck extends SemanticAnalysisTooling {
                 normalised.selector.position
               )
             } chain
-            check(normalised.selector)
+            check(normalised.selector) chain
+            checkNoNestedQuantifiedPathInAcyclicPathPattern(normalised)
         }
 
       case x: NamedPatternPart =>
@@ -252,6 +465,10 @@ object SemanticPatternCheck extends SemanticAnalysisTooling {
         val patternStringifier = PatternStringifier(stringifier)
         checkContext(ctx, patternStringifier.apply(x), s"${x.name}(...)", x.position) chain
           checkNoQuantifiedPatterns chain
+          // Legacy shortestPath/allShortestPaths are nested inside a non-selective
+          // PrefixedPatternPart, so checkStackConstraintsNotWithSelectivePathParts never reaches
+          // them; check them here instead.
+          checkNoStackConstraintsInElement(x.element) chain
           checkContainsSingle chain
           checkKnownEnds chain
           checkLength chain
@@ -266,6 +483,24 @@ object SemanticPatternCheck extends SemanticAnalysisTooling {
     }
 
   private val stringifier = ExpressionStringifier()
+
+  /**
+   * Nested quantified path patterns are not supported inside an ACYCLIC path pattern. The node uniqueness
+   * predicates and the Acyclic runtime state only track the node singletons bound by a repeat, while a nested
+   * quantified path pattern exposes its nodes as (possibly nested) lists.
+   */
+  private def checkNoNestedQuantifiedPathInAcyclicPathPattern(part: PrefixedPatternPart): SemanticCheck =
+    part.pathMode match {
+      case _: PathMode.Acyclic =>
+        // Do not descend into subqueries, which have their own independent scope.
+        quantifiedPathsIn(part.element).iterator
+          .flatMap(qpp => quantifiedPathsIn(qpp.part))
+          .nextOption() match {
+          case Some(nested) => SemanticError.nestedQuantifiedPathInAcyclicPathPattern(nested.position)
+          case None         => success
+        }
+      case _ => success
+    }
 
   private def checkMinimumNodeCount(x: PatternPart): SemanticCheck = {
     when(x.element.folder.treeFold(true) {
@@ -345,7 +580,7 @@ object SemanticPatternCheck extends SemanticAnalysisTooling {
           pattern.folder.treeFold(SemanticCheck.success) {
             case shortestPaths: ShortestPathsPatternPart => acc =>
                 SkipChildren(acc chain SemanticError.shortestPathInsideQPP(shortestPaths.position))
-            case rel @ RelationshipPattern(_, _, Some(_), _, _, _) => acc =>
+            case rel @ RelationshipPattern(_, _, Some(_), _, _, _, _) => acc =>
                 SkipChildren(acc chain SemanticError.invalidUseOfVariableLengthRelationship(
                   "a quantified path pattern",
                   "Variable length relationships cannot be part of a quantified path pattern.",
@@ -496,16 +731,27 @@ object SemanticPatternCheck extends SemanticAnalysisTooling {
       SemanticExpressionCheck.simple(x.properties) chain
         expectType(CTMap.covariant, x.properties)
 
+    def checkStackAction: SemanticCheck =
+      x.stackAction.foldSemanticCheck { action =>
+        // Positions outside a quantified path pattern are reported by
+        // `checkStackConstraintsOnlyInQuantifiedPaths`, which runs for every pattern. Reporting a
+        // clause-specific error here as well would duplicate that diagnostic for CREATE/INSERT/MERGE.
+        val keyCheck = action.key.foldSemanticCheck(key =>
+          SemanticExpressionCheck.simple(key) chain checkNoSubqueryInStackKey(key)
+        )
+        keyCheck
+      }
+
     val stringifier = ExpressionStringifier()
 
     def checkForLegacyTypeSeparator: SemanticCheck = {
       val maybeLabelExpression = x match {
         // We will not complain about this particular case here because that is still allowed although deprecated.
-        case RelationshipPattern(variable, expression, None, None, None, _)
+        case RelationshipPattern(variable, expression, None, None, None, _, _)
           if !variable.exists(variable => AnonymousVariableNameGenerator.isNamed(variable.name)) &&
             expression.forall(!_.containsGpmSpecificRelTypeExpression) => None
-        case RelationshipPattern(_, Some(labelExpression), _, _, _, _) => Some(labelExpression)
-        case _                                                         => None
+        case RelationshipPattern(_, Some(labelExpression), _, _, _, _, _) => Some(labelExpression)
+        case _                                                            => None
       }
       val maybeOffendingLabelExpression = maybeLabelExpression.flatMap(_.folder.treeFindByClass[ColonDisjunction])
       maybeOffendingLabelExpression.foldSemanticCheck { illegalColonDisjunction =>
@@ -522,7 +768,7 @@ object SemanticPatternCheck extends SemanticAnalysisTooling {
 
     def checkForQuantifiedLabelExpression: SemanticCheck = {
       x match {
-        case RelationshipPattern(_, Some(labelExpression), Some(_), _, _, _)
+        case RelationshipPattern(_, Some(labelExpression), Some(_), _, _, _, _)
           if labelExpression.containsGpmSpecificRelTypeExpression =>
           SemanticAnalysisToolingErrorWithGqlInfo.invalidUseOfVariableLengthRelationshipError(
             "combination with relationship type expressions",
@@ -574,6 +820,7 @@ object SemanticPatternCheck extends SemanticAnalysisTooling {
       checkValidPropertyKeyNamesInPattern(x.properties) chain
       checkLabelExpressions(ctx, x.labelExpression) chain
       checkPredicate(ctx, x) chain
+      checkStackAction chain
       checkNotUndirectedWhenCreating
   }
 
@@ -812,10 +1059,10 @@ object SemanticPatternCheck extends SemanticAnalysisTooling {
    */
   def findRepeatedRelationships(treeNode: ASTNode, varLength: Boolean): Seq[LogicalVariable] = {
     val relVariables = treeNode.folder.fold(Map[String, List[LogicalVariable]]().withDefaultValue(Nil)) {
-      case RelationshipChain(_, RelationshipPattern(Some(rel), _, None, _, _, _), _) if !varLength =>
+      case RelationshipChain(_, RelationshipPattern(Some(rel), _, None, _, _, _, _), _) if !varLength =>
         map =>
           map.updated(rel.name, rel :: map(rel.name))
-      case RelationshipChain(_, RelationshipPattern(Some(rel), _, Some(_), _, _, _), _) if varLength =>
+      case RelationshipChain(_, RelationshipPattern(Some(rel), _, Some(_), _, _, _, _), _) if varLength =>
         map =>
           map.updated(rel.name, rel :: map(rel.name))
       case _ =>

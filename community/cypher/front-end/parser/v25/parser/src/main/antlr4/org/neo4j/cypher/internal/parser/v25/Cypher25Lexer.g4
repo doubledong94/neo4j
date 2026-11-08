@@ -188,6 +188,10 @@ AUTO
    : A U T O
    ;
 
+BALANCED
+   : B A L A N C E D
+   ;
+
 BAR
    : '|'
    ;
@@ -998,6 +1002,10 @@ POINT
    : P O I N T
    ;
 
+POP
+   : P O P
+   ;
+
 POPULATED
    : P O P U L A T E D
    ;
@@ -1048,6 +1056,10 @@ PROVIDER
 
 PROVIDERS
    : P R O V I D E R S
+   ;
+
+PUSH
+   : P U S H
    ;
 
 QUESTION
@@ -1274,6 +1286,10 @@ SKIPROWS
    : S K I P
    ;
 
+STACK
+   : S T A C K
+   ;
+
 START
    : S T A R T
    ;
@@ -1392,6 +1408,10 @@ TYPES
 
 UUID
    : U U I D
+   ;
+
+UNBALANCED
+   : U N B A L A N C E D
    ;
 
 UNION

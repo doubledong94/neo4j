@@ -888,4 +888,6 @@ public interface Cypher25ParserListener extends ParseTreeListener {
     void exitUnescapedSymbolicNameString_(Cypher25Parser.UnescapedSymbolicNameString_Context ctx);
 
     void exitEndOfFile(Cypher25Parser.EndOfFileContext ctx);
+
+    void exitStackAction(Cypher25Parser.StackActionContext ctx);
 }

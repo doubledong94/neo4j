@@ -28,6 +28,7 @@ import org.neo4j.cypher.internal.runtime.CastSupport.castOrFail
 import org.neo4j.cypher.internal.runtime.ClosingIterator
 import org.neo4j.cypher.internal.runtime.CypherRow
 import org.neo4j.cypher.internal.runtime.IsNoValue
+import org.neo4j.cypher.internal.runtime.NestedGroupValues
 import org.neo4j.cypher.internal.runtime.PrefetchingIterator
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.Expression
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.RepeatPipe.AcyclicModeConstraint
@@ -60,7 +61,15 @@ sealed trait LegacyRepeatState {
   val groupRelationships: HeapTrackingArrayList[ListValue]
   val iterations: Int
   val accumulatorValues: Array[AnyValue]
-  def close(): Unit
+  val stacks: Map[String, StackActionRuntime.StackValue]
+
+  /** Heap allocated for [[stacks]] when this state was created, released again on close. */
+  val stacksHeapUsage: Long
+
+  protected def releaseStacks(tracker: MemoryTracker): Unit =
+    if (stacksHeapUsage != 0L) tracker.releaseHeap(stacksHeapUsage)
+
+  def close(tracker: MemoryTracker): Unit
 }
 
 case class AcyclicLegacyRepeatState(
@@ -72,16 +81,19 @@ case class AcyclicLegacyRepeatState(
   constraint: AcyclicModeConstraint,
   relationshipsSeen: HeapTrackingLongHashSet,
   nodesSeen: HeapTrackingLongHashSet,
-  accumulatorValues: Array[AnyValue]
+  accumulatorValues: Array[AnyValue],
+  stacks: Map[String, StackActionRuntime.StackValue],
+  stacksHeapUsage: Long = 0L
 ) extends LegacyRepeatState {
 
-  def close(): Unit = {
+  def close(tracker: MemoryTracker): Unit = {
     if (closeGroupsOnClose) {
       groupNodes.close()
       groupRelationships.close()
     }
     relationshipsSeen.close()
     nodesSeen.close()
+    releaseStacks(tracker)
   }
 }
 
@@ -93,15 +105,18 @@ case class TrailLegacyRepeatState(
   closeGroupsOnClose: Boolean,
   constraint: TrailModeConstraint,
   relationshipsSeen: HeapTrackingLongHashSet,
-  accumulatorValues: Array[AnyValue]
+  accumulatorValues: Array[AnyValue],
+  stacks: Map[String, StackActionRuntime.StackValue],
+  stacksHeapUsage: Long = 0L
 ) extends LegacyRepeatState {
 
-  def close(): Unit = {
+  def close(tracker: MemoryTracker): Unit = {
     if (closeGroupsOnClose) {
       groupNodes.close()
       groupRelationships.close()
     }
     relationshipsSeen.close()
+    releaseStacks(tracker)
   }
 }
 
@@ -111,14 +126,17 @@ case class WalkLegacyRepeatState(
   groupRelationships: HeapTrackingArrayList[ListValue],
   iterations: Int,
   closeGroupsOnClose: Boolean,
-  accumulatorValues: Array[AnyValue]
+  accumulatorValues: Array[AnyValue],
+  stacks: Map[String, StackActionRuntime.StackValue],
+  stacksHeapUsage: Long = 0L
 ) extends LegacyRepeatState {
 
-  def close(): Unit = {
+  def close(tracker: MemoryTracker): Unit = {
     if (closeGroupsOnClose) {
       groupNodes.close()
       groupRelationships.close()
     }
+    releaseStacks(tracker)
   }
 }
 
@@ -135,7 +153,8 @@ case class RepeatPipe(
   uniquenessConstraint: TraversalModeConstraint,
   reverseGroupVariableProjections: Boolean,
   nodeInScope: Boolean,
-  accumulatorMappings: Array[AllReduceAcc]
+  accumulatorMappings: Array[AllReduceAcc],
+  stackActions: Array[StackActionRuntime] = Array.empty
 )(val id: Id = Id.INVALID_ID) extends PipeWithSource(source) {
 
   private val groupNodeNames = groupNodes.toArray.sortBy(_.singleton.name)
@@ -173,7 +192,8 @@ case class RepeatPipe(
           closeGroupsOnClose = false,
           constraint,
           relationshipsSeen,
-          initialAccumulatorValues
+          initialAccumulatorValues,
+          Map.empty
         )
       case WalkModeConstraint =>
         WalkLegacyRepeatState(
@@ -182,7 +202,8 @@ case class RepeatPipe(
           emptyGroupRelationships,
           iterations = 1,
           closeGroupsOnClose = false,
-          initialAccumulatorValues
+          initialAccumulatorValues,
+          Map.empty
         )
       case constraint @ AcyclicModeConstraint(
           _,
@@ -211,7 +232,8 @@ case class RepeatPipe(
           constraint,
           relationshipsSeen,
           nodesSeen,
-          initialAccumulatorValues
+          initialAccumulatorValues,
+          Map.empty
         )
     }
   }
@@ -229,9 +251,9 @@ case class RepeatPipe(
     }
     val ig = previouslyBoundGroups.iterator
     while (ig.hasNext) {
-      val i = castOrFail[ListValue](outerRow.getByName(ig.next())).iterator()
-      while (i.hasNext) {
-        seen.add(castOrFail[V](i.next()).id())
+      NestedGroupValues.foreachValue(outerRow.getByName(ig.next())) { entity =>
+        seen.add(castOrFail[V](entity).id())
+        true
       }
     }
     seen
@@ -243,8 +265,13 @@ case class RepeatPipe(
     innerEndNode: VirtualNodeValue,
     newGroupNodes: HeapTrackingArrayList[ListValue],
     newGroupRels: HeapTrackingArrayList[ListValue],
+    newStacks: Map[String, StackActionRuntime.StackValue],
+    newStacksHeapUsage: Long,
     tracker: MemoryTracker
   ): Option[LegacyRepeatState] = {
+    // Only account for the memory the new state adds on top of its parent. The immutable stack lists
+    // share their tails, so a state must not be charged for the whole depth it references; the delta
+    // is accumulated incrementally by the stack actions instead of re-walking the stacks.
     repeatState match {
       case trailState: TrailLegacyRepeatState =>
         val newSet = HeapTrackingCollections.newLongSet(tracker, trailState.relationshipsSeen)
@@ -254,12 +281,13 @@ case class RepeatPipe(
         var i = 0
         while (allRelationshipsUnique && i < innerRelationshipsArray.length) {
           val r = innerRelationshipsArray(i)
-          allRelationshipsUnique = forEachRelationshipId(row.getByName(r))(newSet.add)
+          allRelationshipsUnique = NestedGroupValues.foreachRelationshipId(row.getByName(r))(newSet.add)
           i += 1
         }
 
         if (allRelationshipsUnique) {
           val accumulatorValues = sortedAccumulators.map(acc => row.getByName(acc.next))
+          tracker.allocateHeap(newStacksHeapUsage)
           Some(TrailLegacyRepeatState(
             innerEndNode.id(),
             newGroupNodes,
@@ -268,7 +296,9 @@ case class RepeatPipe(
             closeGroupsOnClose = true,
             trailState.constraint,
             newSet,
-            accumulatorValues
+            accumulatorValues,
+            newStacks,
+            newStacksHeapUsage
           ))
         } else None
       case acyclicState: AcyclicLegacyRepeatState =>
@@ -295,12 +325,13 @@ case class RepeatPipe(
         i = 0
         while (i < innerRelationshipsArray.length) {
           val r = innerRelationshipsArray(i)
-          allRelationshipsUnique = forEachRelationshipId(row.getByName(r))(newRelationships.add)
+          allRelationshipsUnique = NestedGroupValues.foreachRelationshipId(row.getByName(r))(newRelationships.add)
           i += 1
         }
 
         if (allNodesUnique && allRelationshipsUnique) {
           val accumulatorValues = sortedAccumulators.map(acc => row.getByName(acc.next))
+          tracker.allocateHeap(newStacksHeapUsage)
           Some(AcyclicLegacyRepeatState(
             innerEndNode.id(),
             newGroupNodes,
@@ -310,38 +341,24 @@ case class RepeatPipe(
             acyclicState.constraint,
             newRelationships,
             newNodes,
-            accumulatorValues
+            accumulatorValues,
+            newStacks,
+            newStacksHeapUsage
           ))
         } else None
       case walkState: WalkLegacyRepeatState =>
         val accumulatorValues = sortedAccumulators.map(acc => row.getByName(acc.next))
+        tracker.allocateHeap(newStacksHeapUsage)
         Some(WalkLegacyRepeatState(
           innerEndNode.id(),
           newGroupNodes,
           newGroupRels,
           walkState.iterations + 1,
           closeGroupsOnClose = true,
-          accumulatorValues
+          accumulatorValues,
+          newStacks,
+          newStacksHeapUsage
         ))
-    }
-  }
-
-  /**
-   * A nested quantified path pattern is exposed at the enclosing level through its group variable, which holds a
-   * list of the relationships bound by one repetition of the inner pattern. A plain relationship is treated as a
-   * singleton list. Runs `f` for every relationship id, short-circuiting as soon as `f` returns false.
-   */
-  private def forEachRelationshipId(value: AnyValue)(f: Long => Boolean): Boolean = {
-    value match {
-      case list: ListValue =>
-        val it = list.iterator()
-        var result = true
-        while (result && it.hasNext) {
-          result = f(castOrFail[VirtualRelationshipValue](it.next()).id())
-        }
-        result
-      case rel =>
-        f(castOrFail[VirtualRelationshipValue](rel).id())
     }
   }
 
@@ -354,7 +371,7 @@ case class RepeatPipe(
         val innerRelationshipsSeen = collection.mutable.Set[Long]()
         while (relationshipsAreUnique && i < innerRelationshipsArray.length) {
           val r = innerRelationshipsArray(i)
-          relationshipsAreUnique = forEachRelationshipId(row.getByName(r)) { rel =>
+          relationshipsAreUnique = NestedGroupValues.foreachRelationshipId(row.getByName(r)) { rel =>
             !acyclicState.relationshipsSeen.contains(rel) && innerRelationshipsSeen.add(rel)
           }
           i += 1
@@ -383,7 +400,7 @@ case class RepeatPipe(
         val innerRelationshipsSeen = collection.mutable.Set[Long]()
         while (relationshipsAreUnique && i < innerRelationshipsArray.length) {
           val r = innerRelationshipsArray(i)
-          relationshipsAreUnique = forEachRelationshipId(row.getByName(r)) { rel =>
+          relationshipsAreUnique = NestedGroupValues.foreachRelationshipId(row.getByName(r)) { rel =>
             !trailState.relationshipsSeen.contains(rel) && innerRelationshipsSeen.add(rel)
           }
           i += 1
@@ -392,6 +409,13 @@ case class RepeatPipe(
       case _: WalkLegacyRepeatState =>
         true
     }
+
+  private def applyStackActions(
+    stacks: Map[String, StackActionRuntime.StackValue],
+    row: CypherRow,
+    state: QueryState
+  ): Option[StackActionRuntime.Applied] =
+    StackActionRuntime.applyAll(stackActions, stacks, row, state)
 
   override protected def internalCreateResults(
     input: ClosingIterator[CypherRow],
@@ -427,7 +451,11 @@ case class RepeatPipe(
 
             override protected[this] def closeMore(): Unit = {
               if (stackHead != null) {
-                stackHead.close()
+                stackHead.close(tracker)
+              }
+              // States still waiting on the stack were never popped, so close them here as well.
+              while (!stack.isEmpty) {
+                stack.pop().close(tracker)
               }
               innerResult.close()
               stack.close()
@@ -441,29 +469,48 @@ case class RepeatPipe(
               } else if (innerResult.hasNext) {
                 val row = innerResult.next()
                 val innerEndNode = castOrFail[VirtualNodeValue](row.getByName(innerEnd))
-                val newGroupNodes = computeGroupVariables(groupNodeNames, stackHead.groupNodes, row, tracker)
-                val newGroupRels =
-                  computeGroupVariables(groupRelationshipNames, stackHead.groupRelationships, row, tracker)
-                if (repetition.max.isGreaterThan(stackHead.iterations)) {
-                  maybeCreateNextState(stackHead, row, innerEndNode, newGroupNodes, newGroupRels, tracker)
-                    .foreach(stack.push)
-                }
-                // if iterated long enough emit, otherwise recurse
-                if (stackHead.iterations >= repetition.min && testEndNode(row, innerEndNode)) {
-                  val resultRow = row.copyWith(computeNewEntries(
-                    newGroupNodes,
-                    newGroupRels,
-                    innerEndNode,
-                    stackHead.accumulatorValues
-                  ))
-                  Some(resultRow)
-                } else {
+                val nextStacksOpt: Option[StackActionRuntime.Applied] =
+                  if (stackActions.isEmpty) None else applyStackActions(stackHead.stacks, row, state)
+                if (nextStacksOpt.isEmpty && stackActions.nonEmpty) {
                   produceNext()
+                } else {
+                  val (nextStacks, nextStacksHeapUsage) = nextStacksOpt match {
+                    case Some(applied) => (applied.stacks, math.max(0L, applied.heapDelta))
+                    case None          => (stackHead.stacks, 0L)
+                  }
+                  val newGroupNodes = computeGroupVariables(groupNodeNames, stackHead.groupNodes, row, tracker)
+                  val newGroupRels =
+                    computeGroupVariables(groupRelationshipNames, stackHead.groupRelationships, row, tracker)
+                  if (repetition.max.isGreaterThan(stackHead.iterations)) {
+                    maybeCreateNextState(
+                      stackHead,
+                      row,
+                      innerEndNode,
+                      newGroupNodes,
+                      newGroupRels,
+                      nextStacks,
+                      nextStacksHeapUsage,
+                      tracker
+                    ).foreach(stack.push)
+                  }
+                  val balanced = StackActionRuntime.areRequiredStacksBalanced(stackActions, nextStacks)
+                  // if iterated long enough emit, otherwise recurse
+                  if (stackHead.iterations >= repetition.min && balanced && testEndNode(row, innerEndNode)) {
+                    val resultRow = row.copyWith(computeNewEntries(
+                      newGroupNodes,
+                      newGroupRels,
+                      innerEndNode,
+                      stackHead.accumulatorValues
+                    ))
+                    Some(resultRow)
+                  } else {
+                    produceNext()
+                  }
                 }
               } else if (!stack.isEmpty) {
                 // close previous state
                 if (stackHead != null) {
-                  stackHead.close()
+                  stackHead.close(tracker)
                 }
                 // Run RHS with previous end-node as new innerStartNode
                 stackHead = stack.pop()

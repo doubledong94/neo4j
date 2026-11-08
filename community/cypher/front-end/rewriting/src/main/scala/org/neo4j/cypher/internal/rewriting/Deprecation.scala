@@ -83,7 +83,7 @@ object Deprecations {
     override def find(version: CypherVersion): PartialFunction[Any, Deprecation] = Function.unlift {
 
       // legacy type separator -[:A|:B]->
-      case rel @ RelationshipPattern(variable, Some(labelExpression), None, None, None, _)
+      case rel @ RelationshipPattern(variable, Some(labelExpression), None, None, None, _, _)
         // this restriction is necessary because in all other cases, this is an error
         if variable.forall(variable => !AnonymousVariableNameGenerator.isNamed(variable.name)) &&
           !labelExpression.containsGpmSpecificRelTypeExpression &&
@@ -105,7 +105,7 @@ object Deprecations {
           None,
           Some(DeprecatedWhereVariableInNodePattern(variable.position, variable.name, stringifier(properties)))
         ))
-      case RelationshipPattern(Some(variable), None, _, Some(properties), None, _)
+      case RelationshipPattern(Some(variable), None, _, Some(properties), None, _, _)
         if RelationshipPattern.WhereVariableInRelationshipPatterns.deprecatedIn(version) &&
           !variable.isIsolated && variable.name.equalsIgnoreCase("where") =>
         Some(Deprecation(
@@ -169,7 +169,7 @@ object Deprecations {
       case s @ ShortestPathsPatternPart(
           relChain @ RelationshipChain(
             node1: NodePattern,
-            relPat @ RelationshipPattern(variable, labelExpression, None, properties, predicate, direction),
+            relPat @ RelationshipPattern(variable, labelExpression, None, properties, predicate, direction, _),
             node2
           ),
           single

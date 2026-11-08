@@ -739,7 +739,7 @@ class ExpandPlanningIntegrationTest extends CypherPlannerTestSuite with LogicalP
     val query = "MATCH (a {name:'A'}), (b {name:'B'}) MERGE (a)-[r:TYPE]->(b) ON CREATE SET r = properties(a)"
 
     planner.plan(query) should containPlanMatching {
-      case Expand(_, _, _, _, _, _, ExpandInto) =>
+      case Expand(_, _, _, _, _, _, ExpandInto, _) =>
     }
   }
 
@@ -751,7 +751,7 @@ class ExpandPlanningIntegrationTest extends CypherPlannerTestSuite with LogicalP
     val query = "MATCH (a {name:'A'}), (b {name:'B'}) MERGE (a)-[r:TYPE]->(b) ON MATCH SET r = properties(a)"
 
     planner.plan(query) should containPlanMatching {
-      case Expand(_, _, _, _, _, _, ExpandInto) =>
+      case Expand(_, _, _, _, _, _, ExpandInto, _) =>
     }
   }
 
@@ -765,7 +765,7 @@ class ExpandPlanningIntegrationTest extends CypherPlannerTestSuite with LogicalP
         |MERGE (a)-[r:TYPE]->(b) ON CREATE SET r += {foo: 'bar', bar: 'baz'}""".stripMargin
 
     planner.plan(query) should containPlanMatching {
-      case Expand(_, _, _, _, _, _, ExpandInto) =>
+      case Expand(_, _, _, _, _, _, ExpandInto, _) =>
     }
   }
 
@@ -779,7 +779,7 @@ class ExpandPlanningIntegrationTest extends CypherPlannerTestSuite with LogicalP
         |MERGE (a)-[r:TYPE]->(b) ON MATCH SET r += {foo: 'baz', bar: 'baz'}""".stripMargin
 
     planner.plan(query) should containPlanMatching {
-      case Expand(_, _, _, _, _, _, ExpandInto) =>
+      case Expand(_, _, _, _, _, _, ExpandInto, _) =>
     }
   }
 

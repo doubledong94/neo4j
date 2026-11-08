@@ -46,7 +46,23 @@ final case class MultiRelationshipPathStep(
   override val dependencies: Set[LogicalVariable] = next.dependencies ++ toNode + rel
 }
 
-final case class RepeatPathStep(variables: Seq[NodeRelPair], toNode: LogicalVariable, next: PathStep)(
+/**
+ * Describes one level of group variables of a quantified path pattern in a projected path.
+ *
+ * A quantified path pattern exposes its values through group variables, one pair of (node, relationship) group
+ * variables per relationship of its body, in path order. A nested quantified path pattern is represented by its own
+ * group variables at the level below, which is why this is a tree and not a flat list: a path may mix relationships
+ * of the enclosing pattern with nested quantified path patterns, and the two have a different nesting depth.
+ */
+sealed trait RepeatPathGroup {
+  def variables: Seq[LogicalVariable]
+}
+
+case class NestedRepeatPathGroup(groups: Seq[RepeatPathGroup]) extends RepeatPathGroup {
+  override def variables: Seq[LogicalVariable] = groups.flatMap(_.variables)
+}
+
+final case class RepeatPathStep(variables: Seq[RepeatPathGroup], toNode: LogicalVariable, next: PathStep)(
   val position: InputPosition
 ) extends PathStep {
   override def dependencies: Set[LogicalVariable] = next.dependencies ++ variables.flatMap(_.variables) ++ Set(toNode)
@@ -76,6 +92,6 @@ case class PathExpression(step: PathStep)(val position: InputPosition) extends E
   override def isConstantForQuery: Boolean = false
 }
 
-case class NodeRelPair(node: LogicalVariable, relationship: LogicalVariable) {
-  def variables: Seq[LogicalVariable] = Seq(node, relationship)
+case class NodeRelPair(node: LogicalVariable, relationship: LogicalVariable) extends RepeatPathGroup {
+  override def variables: Seq[LogicalVariable] = Seq(node, relationship)
 }

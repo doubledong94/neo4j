@@ -88,14 +88,34 @@ case class LimitRangesOnSelectivePathPattern(rewriteQuantifiersAbove: Int) {
     (extractedPredicates ++ maybeMaxExpression ++ maybeMinExpression, prWithUpdatedRange)
   }
 
+  /**
+   * Limits the range of the quantified path pattern itself. A boundary predicate can only refer to a group
+   * variable that is bound by the selective path pattern, and such a variable holds one entry per repetition
+   * of the enclosing quantified path pattern.
+   *
+   * Ranges are only rewritten for quantified path patterns that do not contain a nested quantified path
+   * pattern. The nested pattern exposes its own group variables, which the enclosing group variable aggregates
+   * into a list per repetition. The selective path runtime only materializes one flat list per group variable
+   * and does not populate the enclosing group variable of a nested pattern, so a `size(...)` predicate on it
+   * can neither count repetitions nor relationships. The ranges of nested quantified path patterns (and of
+   * patterns containing them) are therefore deliberately left untouched.
+   */
   private def limitRangesOnQPP(
     extractedPredicates: Set[Expression],
     qpp: QuantifiedPathPattern
   ): (Set[Expression], QuantifiedPathPattern) = {
-    val amountOfRelationships = qpp.allPatternRelationships.size
-    val startRelationship = qpp.relationshipVariableGroupings.headOption.map(_.group)
+    if (qpp.allQuantifiedPathPatterns.nonEmpty) {
+      return (extractedPredicates, qpp)
+    }
+    // Each relationship of one repetition maps to its own group variable, so the number of group variables
+    // is the number of relationships traversed per repetition.
+    val amountOfRelationships = qpp.relationshipVariableGroupings.size.toLong
+    val startRelationship = qpp.relationships.toSeq.sortBy(_.name).headOption
     val (newMin, maybeMinExpression) =
-      if (qpp.repetition.min * amountOfRelationships < rewriteQuantifiersAbove)
+      if (
+        startRelationship.isEmpty ||
+        !producesAtLeast(rewriteQuantifiersAbove, qpp.repetition.min, amountOfRelationships)
+      )
         (qpp.repetition.min.toInt, None)
       else
         (1, startRelationship.map(minRestrictionPredicate(_, qpp.repetition.min.toString)))
@@ -103,15 +123,26 @@ case class LimitRangesOnSelectivePathPattern(rewriteQuantifiersAbove: Int) {
       case UpperBound.Unlimited =>
         (UpperBound.Unlimited, None)
       case UpperBound.Limited(limit) =>
-        if (limit * amountOfRelationships < rewriteQuantifiersAbove)
+        if (
+          startRelationship.isEmpty ||
+          !producesAtLeast(rewriteQuantifiersAbove, limit, amountOfRelationships)
+        )
           (UpperBound.Limited(limit), None)
         else
           (UpperBound.Unlimited, startRelationship.map(maxRestrictionPredicate(_, limit.toString)))
     }
+
     val qppWithUpdatedRange = qpp.copy(repetition = qpp.repetition.copy(min = newMin, max = newMax))
 
     (extractedPredicates ++ maybeMaxExpression ++ maybeMinExpression, qppWithUpdatedRange)
   }
+
+  /**
+   * Whether `iterations` repetitions of a pattern that traverses `amountPerIteration` relationships each can
+   * produce at least `threshold` relationships. Uses BigInt to be safe against overflows of large quantifiers.
+   */
+  private def producesAtLeast(threshold: Int, iterations: Long, amountPerIteration: Long): Boolean =
+    BigInt(iterations) * BigInt(amountPerIteration) >= BigInt(threshold)
 
   private def minRestrictionPredicate(variable: LogicalVariable, min: String): GreaterThanOrEqual = {
     val pos = InputPosition.NONE

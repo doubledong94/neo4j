@@ -366,7 +366,7 @@ case class CardinalityCostModel(
       // like Selection which doesn't reflect that for each row it creates it will read data from
       // the relationship store. This particular special case is just for making it more likely to plan
       // AllRelationshipsScan since we know they are always faster than doing AllNodes + Expand
-      case Expand(AllNodesScanIsh(), _, _, types, _, _, ExpandAll) if types.isEmpty =>
+      case Expand(AllNodesScanIsh(), _, _, types, _, _, ExpandAll, _) if types.isEmpty =>
         // AllNodes + Expand is more expensive than scanning the relationship directly
         val rowCost = CostPerRow(ALL_SCAN_COST_PER_ROW * 1.1)
         // Note: we use the outputCardinality to compute the cost
@@ -374,7 +374,7 @@ case class CardinalityCostModel(
         costForThisPlan + lhsCost + rhsCost
 
       // Always consider AllNodesScan + Expand more expensive than RelationshipTypeScan
-      case exp @ Expand(AllNodesScanIsh(), _, _, types, _, _, ExpandAll) if types.size == 1 =>
+      case exp @ Expand(AllNodesScanIsh(), _, _, types, _, _, ExpandAll, _) if types.size == 1 =>
         val rowCost =
           CostPerRow(1.1 * hackyRelTypeScanCost(propertyAccess, exp.maybeRelName, exp.dir != SemanticDirection.BOTH))
         // Note: we use the outputCardinality to compute the cost
