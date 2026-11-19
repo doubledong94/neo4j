@@ -37,7 +37,10 @@ import org.neo4j.cypher.internal.runtime.interpreted.CommandProjection
 import org.neo4j.cypher.internal.runtime.interpreted.GroupingExpression
 import org.neo4j.cypher.internal.runtime.interpreted.commands
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath
+import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.NestedRepeatProjection
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.Projector
+import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.RepeatEntityProjection
+import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.RepeatGroupProjection
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.multiIncomingRelationshipProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.multiIncomingRelationshipWithKnownTargetProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.multiOutgoingRelationshipProjector
@@ -45,9 +48,6 @@ import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.Projec
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.multiUndirectedRelationshipProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.multiUndirectedRelationshipWithKnownTargetProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.nilProjector
-import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.NestedRepeatProjection
-import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.RepeatEntityProjection
-import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.RepeatGroupProjection
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.quantifiedPathProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.singleIncomingRelationshipProjector
 import org.neo4j.cypher.internal.runtime.interpreted.commands.expressions.ProjectedPath.singleNodeProjector

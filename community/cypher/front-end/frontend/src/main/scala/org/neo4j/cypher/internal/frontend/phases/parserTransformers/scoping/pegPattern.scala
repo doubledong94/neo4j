@@ -447,10 +447,10 @@ object pegPattern {
 
   private def collectVisibleVariablesOfPatternAtom(patternAtom: PatternAtom): Set[LogicalVariable] = {
     patternAtom match {
-      case NodePattern(Some(variable), _, _, _)               => Set(variable)
+      case NodePattern(Some(variable), _, _, _)                  => Set(variable)
       case RelationshipPattern(Some(variable), _, _, _, _, _, _) => Set(variable)
-      case quantifiedPath: QuantifiedPath                     => collectVisibleVariablesOfQuantifiedPath(quantifiedPath)
-      case _                                                  => Set.empty
+      case quantifiedPath: QuantifiedPath => collectVisibleVariablesOfQuantifiedPath(quantifiedPath)
+      case _                              => Set.empty
     }
   }
 

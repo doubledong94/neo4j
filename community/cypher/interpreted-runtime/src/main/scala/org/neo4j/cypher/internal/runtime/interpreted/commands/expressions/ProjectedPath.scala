@@ -271,7 +271,7 @@ object ProjectedPath {
         var level = 0
         while (level < path.length) {
           value = value match {
-            case list: ListValue => list.value(path(level))
+            case list: ListValue    => list.value(path(level))
             case x if x eq NO_VALUE => VirtualValues.EMPTY_LIST
             case other =>
               throw CypherTypeException.expectedListValue(

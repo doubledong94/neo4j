@@ -28,7 +28,6 @@ import org.neo4j.cypher.internal.expressions.LogicalVariable
 import org.neo4j.cypher.internal.expressions.NODE_TYPE
 import org.neo4j.cypher.internal.expressions.PropertyKeyName
 import org.neo4j.cypher.internal.expressions.RELATIONSHIP_TYPE
-import org.neo4j.cypher.internal.runtime.interpreted.pipes.StackActionRuntime
 import org.neo4j.cypher.internal.frontend.phases.QueryLanguage.toKernelScope
 import org.neo4j.cypher.internal.frontend.phases.ResolvedNonLocalCall
 import org.neo4j.cypher.internal.ir.CreatePattern
@@ -169,8 +168,8 @@ import org.neo4j.cypher.internal.logical.plans.RemoteBatchPropertiesWithFilter
 import org.neo4j.cypher.internal.logical.plans.RemoteNodeIndexSeek
 import org.neo4j.cypher.internal.logical.plans.RemoteNodeUniqueIndexSeek
 import org.neo4j.cypher.internal.logical.plans.RemoveLabels
-import org.neo4j.cypher.internal.logical.plans.RepeatAcyclic
 import org.neo4j.cypher.internal.logical.plans.Repeat
+import org.neo4j.cypher.internal.logical.plans.RepeatAcyclic
 import org.neo4j.cypher.internal.logical.plans.RepeatTrail
 import org.neo4j.cypher.internal.logical.plans.RepeatWalk
 import org.neo4j.cypher.internal.logical.plans.RightOuterHashJoin
@@ -373,6 +372,7 @@ import org.neo4j.cypher.internal.runtime.interpreted.pipes.SetRelationshipProper
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.ShortestPathPipe
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.SkipPipe
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.SortPipe
+import org.neo4j.cypher.internal.runtime.interpreted.pipes.StackActionRuntime
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.StatefulShortestPathPipe
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.SubqueryForeachPipe
 import org.neo4j.cypher.internal.runtime.interpreted.pipes.SubtractionNodeByLabelsScanPipe
@@ -2365,6 +2365,7 @@ case class InterpretedPipeMapper(
     val inner = repeat.rhs.get
     StackActionRuntime.compile(repeat, expressionConverters.toCommandExpression(inner.id, _))
   }
+
   override def onTwoChildPlan(plan: LogicalPlan, lhs: Pipe, rhs: Pipe): Pipe = {
     val id = plan.id
 
